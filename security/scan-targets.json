@@ -1,0 +1,9 @@
+{
+  "images": [
+    {
+      "name": "echo-demo-app",
+      "ref": "ghcr.io/softbank-hackathon-2026-team-echo/echo-demo-app@sha256:3a8211ce82191fdee4da70d736f4946bf8be84c052bf889f7f5c2e6b596405bd",
+      "deployedBy": "echo-infra demo-app/base/kustomization.yaml"
+    }
+  ]
+}
