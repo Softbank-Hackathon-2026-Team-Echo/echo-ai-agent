@@ -1,0 +1,143 @@
+# 운영에 배포된 이미지를 Trivy 로 검사해 보안 증거 원문(산출물)을 남긴다.
+#
+# - 대상: security/scan-targets.json 의 이미지(digest 고정) 전부, 또는 수동 실행 때 입력한 하나
+# - 산출물: image-scan-<digest 앞 12자>
+#     trivy-image.json  취약점·비밀 검사 원문(Trivy JSON, SchemaVersion 2)
+#     meta.json         대상 이미지·digest·Trivy 버전·취약점 DB 시각·실행 번호·커밋
+# - 검사 결과로 이 작업을 실패시키지 않는다. 판정은 echo-was 규칙표(보안·거버넌스 3)가 한다.
+#   echo-was 수집기(보안·거버넌스 2)가 actions: read 토큰으로 산출물을 읽는다.
+# - 클라우드 자격을 쓰지 않는다. 공개 GHCR 이미지만 받는다. 저장소 권한은 contents: read 뿐이다.
+name: image-scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_ref:
+        description: "검사할 이미지 하나(<repo>@sha256:<64자>). 비우면 security/scan-targets.json 전부"
+        required: false
+        default: ""
+  schedule:
+    # 매일 06:17 KST. 취약점 DB 갱신을 반영하고, 증거 유효기간(7일) 안에 새 증거를 둔다.
+    - cron: "17 21 * * *"
+  push:
+    branches: [main]
+    paths:
+      - security/scan-targets.json
+      - .github/workflows/image-scan.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-scan
+  cancel-in-progress: false
+
+env:
+  TRIVY_VERSION: "0.75.0"
+  # aquasecurity/trivy v0.75.0 의 trivy_0.75.0_Linux-64bit.tar.gz (릴리스 checksums.txt 값)
+  TRIVY_SHA256: "c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f"
+
+jobs:
+  targets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      refs: ${{ steps.refs.outputs.refs }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 대상 목록
+        id: refs
+        env:
+          INPUT_REF: ${{ inputs.image_ref }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_REF:-}" ]; then
+            refs=$(jq -cn --arg ref "$INPUT_REF" '[$ref]')
+          else
+            refs=$(jq -c '[.images[].ref]' security/scan-targets.json)
+          fi
+          # digest 로 고정한 참조만 받는다(태그·공백·셸 문자는 거부).
+          echo "$refs" | jq -e \
+            'length > 0 and all(.[]; test("^[a-z0-9][a-z0-9./_-]*@sha256:[0-9a-f]{64}$"))' > /dev/null
+          echo "refs=$refs" >> "$GITHUB_OUTPUT"
+
+  scan:
+    needs: targets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        image_ref: ${{ fromJSON(needs.targets.outputs.refs) }}
+    env:
+      IMAGE_REF: ${{ matrix.image_ref }}
+    steps:
+      - name: Trivy 설치(버전·체크섬 고정)
+        run: |
+          set -euo pipefail
+          archive="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${archive}"
+          echo "${TRIVY_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/trivy"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/trivy" trivy
+          echo "$RUNNER_TEMP/trivy" >> "$GITHUB_PATH"
+
+      - name: 검사
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          trivy image --scanners vuln,secret --format json --exit-code 0 --quiet \
+            --output out/trivy-image.json "$IMAGE_REF"
+          trivy version --format json > "$RUNNER_TEMP/trivy-version.json"
+
+      - name: 메타데이터
+        id: meta
+        run: |
+          set -euo pipefail
+          digest="${IMAGE_REF##*@}"
+          short="${digest#sha256:}"
+          jq -n \
+            --arg imageRef "$IMAGE_REF" \
+            --arg imageDigest "$digest" \
+            --arg scannedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg runId "$GITHUB_RUN_ID" \
+            --arg commit "$GITHUB_SHA" \
+            --slurpfile version "$RUNNER_TEMP/trivy-version.json" \
+            '{
+              schemaVersion: 1,
+              imageRef: $imageRef,
+              imageDigest: $imageDigest,
+              scanners: ["vuln", "secret"],
+              trivyVersion: $version[0].Version,
+              vulnerabilityDbUpdatedAt: $version[0].VulnerabilityDB.UpdatedAt,
+              scannedAt: $scannedAt,
+              workflowRunId: $runId,
+              commit: $commit
+            }' > out/meta.json
+          echo "name=image-scan-${short:0:12}" >> "$GITHUB_OUTPUT"
+
+      - name: 요약
+        run: |
+          set -euo pipefail
+          {
+            echo "### $IMAGE_REF"
+            jq -r '"Trivy \(.trivyVersion) · DB \(.vulnerabilityDbUpdatedAt)"' out/meta.json
+            echo ""
+            jq -r '
+              [.Results[]?.Vulnerabilities[]?] as $v
+              | [$v[] | select((.Severity == "HIGH" or .Severity == "CRITICAL") and (.FixedVersion // "") != "")] as $fixable
+              | "- 취약점 \($v | length)건, 그중 수정 가능한 HIGH 이상 \($fixable | length)건",
+                "- 비밀 발견 \([.Results[]?.Secrets[]?] | length)건"
+            ' out/trivy-image.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.meta.outputs.name }}
+          path: out/
+          retention-days: 30
+          if-no-files-found: error
