@@ -1,6 +1,6 @@
 # AI 에이전트 1: 에이전트 SDK·모델·샌드박스 방식 SPEC
 
-- 상태: Draft (2026-11-03, 김형래 검토 전. 9절 PoC는 로컬 Docker 재현 결과를 채움(11/4), VM 결과는 실행 뒤)
+- 상태: Draft (2026-11-03, 김형래 검토 전. 9절 PoC는 로컬 Docker와 샌드박스 VM 모두 통과(11/4). 8절 Q5 원문 대조 남음)
 - 작성일: 2026-11-03
 - Depth: Standard
 - GitHub 이슈: https://github.com/Softbank-Hackathon-2026-Team-Echo/echo-ai-agent/issues/1 (AI 에이전트 1 `[결정]`, 담당 hyeongrae-kim)
@@ -172,15 +172,15 @@ AI 에이전트를 **무엇으로 만들고(SDK·모델) 어디서 돌릴지(샌
 
 | 순서 | 할 일 | 확인 | 로컬 Docker 재현 (11/4 15:03 KST) | 샌드박스 VM |
 |---|---|---|---|---|
-| 1 | 샌드박스 VPC·VM apply(서동옥 님 확인 뒤, 김형래) | VM이 공인 IP 없이 뜸 | 해당 없음 | 대기(인프라 확인 뒤) |
-| 2 | 제어 프로세스 설치, Secret Manager에서 키 읽기 | 키가 메모리에만 있음 | 해당 없음(로컬은 환경 변수) | 대기 |
-| 3 | Tool Runner로 `workspace_exec("python -c 'print(1)'")` 실행 | 출력 `1`, 이벤트 기록 | **모델로 통과(11/4 17:45):** `claude-opus-5-5`가 1턴에 `workspace_exec`로 명령 실행(종료 0, 출력 `1`), 2턴에 결과 보고 후 끝. 토큰 입력 2,236·출력 128, 거절 없음. 키 값은 출력 전체에서 0건 | 대기 |
-| 4 | 작업 공간에서 `curl https://example.com` · 메타데이터 요청 · `echo-dev` 대역 접속 | 모두 실패 | **통과:** `https://example.com`·`169.254.169.254` 접속 모두 실패(`--network none`이라 루프백만 있음, 특정 대역 접속도 같은 이유로 불가) | 대기(VPC 방화벽까지 확인) |
-| 5 | 작업 공간 환경 변수·파일에서 키 검색 | 0건 | **통과:** 환경 변수는 허용 이름만, 호스트에 심은 가짜 키 값이 작업 공간에 없음(`test_host_secrets_never_reach_the_workspace`) | 대기 |
-| 6 | 실행 끝난 뒤 컨테이너·볼륨 | 0개 | **통과:** 남은 컨테이너 0(`docker ps -a --filter label=echo.sandbox`) | 대기 |
+| 1 | 샌드박스 VPC·VM apply(서동옥 님 확인 뒤, 김형래) | VM이 공인 IP 없이 뜸 | 해당 없음 | **통과(11/4 19:41):** echo-infra `gcp/ai-sandbox` apply(16개 생성·변경 0). VM `echo-sandbox-runner` 내부 IP `10.70.0.2`, 공인 IP 없음, Secure Boot. 접속은 IAP SSH만 |
+| 2 | 제어 프로세스 설치, Secret Manager에서 키 읽기 | 키가 메모리에만 있음 | 해당 없음(로컬은 환경 변수) | **통과(19:49):** VM SA가 `echo-sandbox-anthropic-api-key`를 Secret Manager에서 읽어 프로세스 환경 변수로만 넘김. 실행 출력·홈·`/tmp`에서 키 값 0건. 운영 비밀(`echo-dev-entry-weights-token`) 읽기는 `PERMISSION_DENIED`, 프로젝트 VM 목록도 권한 없음 |
+| 3 | Tool Runner로 `workspace_exec("python -c 'print(1)'")` 실행 | 출력 `1`, 이벤트 기록 | **모델로 통과(11/4 17:45):** `claude-opus-5-5`가 1턴에 `workspace_exec`로 명령 실행(종료 0, 출력 `1`), 2턴에 결과 보고 후 끝. 토큰 입력 2,236·출력 128, 거절 없음. 키 값은 출력 전체에서 0건 | **모델로 통과(19:49):** 같은 러너(`a783aac`)로 `claude-opus-5-5`가 1턴에 명령 실행(종료 0, 출력 `1`), 2턴에 보고. 토큰 2,236/130 |
+| 4 | 작업 공간에서 `curl https://example.com` · 메타데이터 요청 · `echo-dev` 대역 접속 | 모두 실패 | **통과:** `https://example.com`·`169.254.169.254` 접속 모두 실패(`--network none`이라 루프백만 있음, 특정 대역 접속도 같은 이유로 불가) | **통과:** 작업 공간 격리 6개 통과. VM 자체도 `echo-dev` 대역(`10.60.0.6:8080`·`10.60.0.8:443`)·바깥 80 접속 실패, 443(`api.anthropic.com` 401, `api.echoport.uk` 204)만 됨 |
+| 5 | 작업 공간 환경 변수·파일에서 키 검색 | 0건 | **통과:** 환경 변수는 허용 이름만, 호스트에 심은 가짜 키 값이 작업 공간에 없음(`test_host_secrets_never_reach_the_workspace`) | **통과:** 러너 시험 40개(Docker 격리·비밀 시험 포함) VM에서 통과 |
+| 6 | 실행 끝난 뒤 컨테이너·볼륨 | 0개 | **통과:** 남은 컨테이너 0(`docker ps -a --filter label=echo.sandbox`) | **통과:** 남은 컨테이너 0 |
 
 - 로컬 재현: echo-ai-agent PR #11(`feat/ai-2-sandbox-runner`, `4771c8a`)에서 `uv run python -m echo_agent.poc`(15:03)와 `--with-model`(17:45) 모두 종료 코드 0. 격리 확인 6개(외부 연결·메타데이터 차단, 루트 쓰기 차단, 비루트 `65532`, 권한 `CapEff 0`, 허용된 환경 변수만) 모두 통과. Docker 시험(격리·비밀·정리) 9개 통과.
-- 고른 방식(Tool Runner + 격리 컨테이너)으로 모델이 명령 하나를 실제로 실행하는 것은 로컬에서 확인했다. 이슈 완료 기준은 같은 확인을 샌드박스 VM에서 했을 때 채운다.
+- 샌드박스 VM(11/4 19:49 KST): 같은 러너 `a783aac`를 IAP SSH로 올려(uv 0.8.17 sha256 확인, `uv sync --frozen`) `python -m echo_agent.poc --with-model` 종료 코드 0. 이슈 완료 기준 "고른 방식으로 샌드박스에서 명령 하나를 실제로 실행"을 채웠다.
 
 결과는 이 표와 이슈 댓글에 시각·명령·출력과 함께 남긴다.
 
