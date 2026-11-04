@@ -1,6 +1,6 @@
-# AI 에이전트 1 부록 A: WAS ↔ AI 러너 계약 v1 (초안)
+# AI 에이전트 1 부록 A: WAS ↔ AI 러너 계약 v1
 
-> **상태:** 초안 — 김형래 승인 전. 승인되고 **echo-was 담당(Saccharine1211 님)과 합의한 뒤**에 echo-was에 새 파일로 PR을 올린다(사람 쪽 API는 `docs/api/prechecks.md`, 러너 쪽은 `docs/agent-runner.md`, 가칭). 그때 `PROGRESS.md` 계약 상태를 "v1 승인"으로 바꾼다. 합의 전까지 원본은 이 파일이다.
+> **상태:** **v1 승인(2026-11-04, 김형래, 8절 권장안대로).** echo-was 쪽 구현(새 표·리비전·검사기 `require_runner`·감사 SYSTEM)은 echo-was에 PR로 올리고 **echo-was 담당(Saccharine1211 님) 리뷰 뒤에 병합**한다. 그 PR에서 이 내용을 echo-was 문서로 옮긴다(사람 쪽 API는 `docs/api/prechecks.md`, 러너 쪽은 `docs/agent-runner.md`, 가칭). 옮기기 전까지 원본은 이 파일이다. 리뷰에서 바뀌면 이 파일도 같이 고친다.
 > **작성:** 2026-11-03 23:00 KST 무렵 · Claude Code
 > **대상:** 레인 A(echo-was 구현) · 레인 B(echo-ai-agent 러너 구현) · 김도영 님(화면, 계약 4-5)
 > **이름:** 모두 가칭이다. 최종 이름은 echo-was 용어 사전에 먼저 적는다.
@@ -170,8 +170,8 @@
 - 이벤트 `step` 값: `SANDBOX_CREATE · INPUT_LOAD · CONFIG_DIFF · ANALYZE · PATCH_PROPOSE · PATCH_VERIFY · SANDBOX_DELETE`. 화면의 단계 표시는 이것을 쓴다(프론트 시뮬레이션의 `SANDBOX · CONFIG_DIFF · FEATURE_GAPS · PATCH_VERIFY · APPROVAL`과 대응표를 프론트 안내서에 적는다).
 - 마감 1분 전까지 결과를 내지 못하면 `status = FAILED`, `failureCode = DEADLINE`으로 낸다.
 
-## 8. 결정해 주실 것 (승인 전에)
+## 8. 결정 (2026-11-04, 김형래: 권장안대로 승인)
 
-1. 러너 행동을 감사에 **SYSTEM + `component=ai-runner`**로 둘지, 새 행위자 종류 `RUNNER`를 만들지 정해야 합니다. 권장은 SYSTEM + component로, enum과 계약 4-8을 덜 바꿉니다.
-2. 계획 이전(PLANNED) 계획 만들기에 최신 사전 점검을 **필수**로 할지 정해야 합니다(권장: 필수). 유효기간은 D01로 따로 정합니다.
-3. 마감 15분, 임대 60초, 크기 제한 값입니다.
+1. 러너 행동의 감사 행위자는 **SYSTEM + `component=ai-runner`**로 한다. 새 행위자 종류 `RUNNER`는 만들지 않는다(enum·계약 4-8을 덜 바꾼다). 이 신원은 실행 가져가기·결과 제출만 할 수 있다(5절).
+2. 계획 이전(PLANNED) 계획을 만들 때 최신 사전 점검을 **필수**로 한다. 재난 자동 이전(EMERGENCY)에는 적용하지 않는다(AI는 DR 실행 경로에서 제외). 유효기간은 팀 결정 D01로 따로 정한다.
+3. 제한 값: 실행 마감 **15분**, 임대 **60초**(하트비트로 연장), 결과 크기는 3.3절 값(diff 하나 200KB, 패치 10개, findings 100개, 이벤트 message 2KB).
