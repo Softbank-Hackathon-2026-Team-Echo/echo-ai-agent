@@ -6,7 +6,7 @@
 
 | 이미지 | 어디서 도나 | 검사 |
 |---|---|---|
-| demo-app 공개 이미지(GHCR) | 팀이 올린 demo-app 묶음(`echo-infra` `demo-app/`, `onprem/install.sh`) | **이 워크플로**(매일) |
+| demo-app 공개 이미지(GHCR) | 온프레 k3s의 demo-app 묶음(`echo-infra` `onprem/install.sh`). EKS·GKE의 손으로 올린 묶음은 11/4 내렸다 | **이 워크플로**(매일) |
 | echo-was 실제 실행기가 배포하는 서비스 이미지(AR `team-echo-final/echo/app`, ECR 미러) | 서비스 네임스페이스(`{서비스}-{8자}`) | echo-was `customer-build.yml` 빌드 때 같은 실행 안에서(echo-was #31). 이 저장소는 클라우드 자격이 없어 AR을 읽지 못한다 |
 
 - 증거는 digest가 같아야 쓰인다. 이전 판정에 쓰는 증거는 서비스 이미지 digest로 만든 것이어야 한다.
