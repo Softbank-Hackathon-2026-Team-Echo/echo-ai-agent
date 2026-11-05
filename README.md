@@ -18,6 +18,10 @@ src/echo_agent/
 ├─ precheck_rules.py   # 사전 점검 규칙 비교(순수 함수): 설정 차이 → configDiff·경고·조치 안내
 ├─ precheck_model.py   # 사전 점검 모델 검토: Claude 한 번(구조화 출력) → AI WARN·model 칸
 └─ precheck_runner.py  # 사전 점검 러너 루프(규칙 비교 → 모델 검토 → 결과 제출)
+deploy/
+├─ echo-precheck-runner.service  # 샌드박스 VM systemd 유닛(전용 사용자·쓰기 금지·죽으면 다시 뜸)
+├─ precheck-runner-start.sh      # 시작 스크립트: Secret Manager → 환경 변수 → 러너
+└─ runner.env.example            # 비밀 없는 환경 파일(모델 켜기·끄기 포함)
 ```
 
 ## 실행
@@ -66,6 +70,101 @@ WAS 사전 점검 실행을 가져가 출발·도착 환경 설정 차이를 규
 4. **비교 규칙**(`precheck_rules.py`, 순수 함수): 환경 종류 · 설정 키 합집합(중첩은 `a.b`, 이름에 `secret`이 들어간 칸은 옮기지 않음) · 이미지 digest(도착에 없음 포함) · 변수 이름 집합(출발에만 있으면 WARN) · 최근 findings의 FAIL·WARN. 차이가 하나라도 있으면 `config-diff` 경고 1건 + 조치 안내(`suggestedFix`), 없으면 PASS. 최근 findings에 FAIL·WARN이 있으면 `recent-findings` 경고가 하나 더 붙는다.
 
 5. **모델 검토**(`precheck_model.py`, 실행마다 호출 한 번, 과금): `claude-opus-5-5`·effort `medium`·도구 없음·구조화 출력·서버 측 fallback. 보내는 것은 허용 목록으로 새로 만든 입력(서비스·두 환경의 종류·설정·digest·변수 이름·최근 findings·규칙 결과)뿐이고, UUID·토큰·키·비밀 이름 칸은 넣지 않는다. 입력은 `<precheck_input>` 데이터 태그 안에 넣고 그 안의 지시를 따르지 않게 한다. 받은 경고는 모두 `WARN`(AI 는 PASS 를 낼 수 없음)이고 요약은 `ai-summary` finding 하나다.
+
+## VM 상시 실행 (systemd)
+
+재난 흐름에서는 사람이 화면에서 점검을 만들면 러너가 바로 가져가야 한다. 러너가 꺼져 있으면 점검이 `QUEUED` 에 머물다 15분 뒤 `TIMED_OUT` 이 되고, 승인 단계가 멈춘다(비상구는 C-AI-1 기한부 예외). 그래서 샌드박스 VM `echo-sandbox-runner`(`team-echo-final`, `asia-northeast3-a`, IAP SSH 만)에서 systemd 서비스 `echo-precheck-runner` 로 계속 켜 둔다. 설계: SPEC [`ai-4`](specs/ai-4-precheck-model-review.md) 8절.
+
+- **과금:** 켜져 있고 `ECHO_PRECHECK_MODEL=on` 이면 **점검 실행마다 모델을 1회** 부른다. 실행이 없을 때는 5초마다 WAS 에 claim 만 하고 모델은 부르지 않는다.
+- **비밀:** 토큰·키는 시작할 때 VM 서비스 계정으로 Secret Manager(`echo-sandbox-was-runner-token`·`echo-sandbox-anthropic-api-key`)에서 읽어 러너 프로세스의 환경 변수로만 넘긴다. 디스크·로그에 남지 않는다.
+
+```text
+/opt/echo-ai-agent/                  root 소유, 서비스는 읽기만
+├─ bin/uv                            uv 0.8.17
+├─ python/                           uv 가 받은 CPython 3.13
+├─ releases/<sha>/                   git archive + .venv(--no-dev) + .deployed-rev
+└─ current -> releases/<sha>
+/etc/echo-precheck-runner/runner.env 비밀 없는 설정(deploy/runner.env.example)
+/etc/systemd/system/echo-precheck-runner.service
+/var/lib/echo-precheck-runner/       서비스 전용 쓰기 자리(gcloud 설정)
+```
+
+아래 명령은 VM 안에서 친다. Mac 에서 한 번에 치려면 앞에 다음을 붙이고 명령을 `--command '…'` 로 넘긴다.
+
+```bash
+gcloud compute ssh echo-sandbox-runner --zone asia-northeast3-a --project team-echo-final --tunnel-through-iap
+```
+
+### 켜기·끄기·상태
+
+```bash
+sudo systemctl enable --now echo-precheck-runner    # 켜기(VM 이 다시 켜져도 자동 시작)
+sudo systemctl stop echo-precheck-runner            # 잠깐 끄기(처리 중인 점검은 끝내고 멈춤, 최대 5분 기다림)
+sudo systemctl disable --now echo-precheck-runner   # 계속 끄기(재부팅해도 안 뜸)
+sudo systemctl restart echo-precheck-runner         # 다시 시작(설정·새 버전 반영)
+systemctl status echo-precheck-runner               # 상태·PID·최근 로그
+```
+
+### 모델만 바로 끄기·켜기
+
+러너는 계속 돌리고 모델 호출(과금)만 멈춘다. 끄면 결과는 규칙 비교만(`model=null`, 화면 "AI 검토 없음")이고 C-AI-1 증거는 계속 생긴다.
+
+```bash
+# 끄기
+sudo sed -i 's/^ECHO_PRECHECK_MODEL=.*/ECHO_PRECHECK_MODEL=off/' /etc/echo-precheck-runner/runner.env \
+  && sudo systemctl restart echo-precheck-runner
+# 켜기
+sudo sed -i 's/^ECHO_PRECHECK_MODEL=.*/ECHO_PRECHECK_MODEL=on/' /etc/echo-precheck-runner/runner.env \
+  && sudo systemctl restart echo-precheck-runner
+# 확인: 마지막 줄이 "model review: off" 또는 "model review: claude-opus-5-5 medium"
+sudo journalctl -u echo-precheck-runner -o cat | grep 'model review:' | tail -1
+```
+
+### 로그 보기
+
+```bash
+sudo journalctl -u echo-precheck-runner -f                          # 실시간
+sudo journalctl -u echo-precheck-runner --since '30 min ago' -o cat  # 최근
+sudo journalctl -u echo-precheck-runner -o cat | grep 'finished run='  # 처리한 점검: status·model_review
+```
+
+한 점검마다 `claimed run=<id>` → `finished run=<id> status=SUCCEEDED … model_review=REVIEWED` 두 줄이 남는다. `model_review` 는 `REVIEWED`(AI 검토됨)·`FAILED`·`REFUSED`·`SKIPPED`(규칙만)·`off`(모델 끔)다. 토큰·키·프롬프트·모델 출력은 로그에 쓰지 않는다.
+
+### 처음 설치 (한 번)
+
+```bash
+sudo useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin echo-runner
+sudo install -d -m 755 /opt/echo-ai-agent/bin /opt/echo-ai-agent/releases /etc/echo-precheck-runner
+sudo install -m 755 ~/.local/bin/uv /opt/echo-ai-agent/bin/uv   # uv 0.8.17(sha256 확인한 것)
+# 아래 "새 버전 올리기"로 release 를 하나 올린 뒤
+sudo install -m 644 /opt/echo-ai-agent/current/deploy/runner.env.example /etc/echo-precheck-runner/runner.env
+sudo systemctl enable --now echo-precheck-runner
+```
+
+### 새 버전 올리기·되돌리기
+
+```bash
+# Mac, 작업 공간 루트: main 의 고정 커밋을 VM /tmp 로
+SHA=$(git -C echo-ai-agent rev-parse --short origin/main)
+git -C echo-ai-agent archive "$SHA" | gcloud compute ssh echo-sandbox-runner --zone asia-northeast3-a \
+  --project team-echo-final --tunnel-through-iap --command "cat > /tmp/echo-ai-agent-$SHA.tar"
+
+# VM
+SHA=<위와 같은 값>; B=/opt/echo-ai-agent; R=$B/releases/$SHA
+sudo install -d -m 755 "$R" && sudo tar -x -C "$R" -f "/tmp/echo-ai-agent-$SHA.tar" --no-same-owner
+echo "code=$SHA" | sudo tee "$R/.deployed-rev" >/dev/null
+(cd "$R" && sudo env UV_PYTHON_INSTALL_DIR=$B/python UV_CACHE_DIR=$B/.uv-cache $B/bin/uv sync --frozen --no-dev)
+sudo chmod -R a+rX "$R" && sudo ln -sfn "$R" "$B/current"
+sudo install -m 644 "$R/deploy/echo-precheck-runner.service" /etc/systemd/system/ && sudo systemctl daemon-reload
+sudo systemctl restart echo-precheck-runner && rm -f "/tmp/echo-ai-agent-$SHA.tar"
+cat /opt/echo-ai-agent/current/.deployed-rev   # 지금 도는 버전
+
+# 되돌리기: 이전 release 로 링크를 바꾸고 다시 시작
+sudo ln -sfn /opt/echo-ai-agent/releases/<이전 sha> /opt/echo-ai-agent/current && sudo systemctl restart echo-precheck-runner
+```
+
+- VM 을 멈추면(인프라 `vm_running = false`) 러너도 멈춘다. 다시 켜면 서비스가 자동으로 뜬다.
+- 설정 오류(환경 변수·키 없음, 종료 코드 2)면 다시 띄우지 않는다. 그 밖에 죽으면 10초 뒤 다시 뜨고, 5분에 5번을 넘기면 멈춘다(`systemctl status` 로 확인).
 
 ## 지키는 것
 
