@@ -1,15 +1,18 @@
-"""러프 사전 점검 러너(AI 에이전트 4 초안): 모델 없이 설정 차이만 비교해 WAS 에 낸다.
+"""사전 점검 러너(AI 에이전트 4): 설정 차이를 규칙으로 비교하고, 모델 검토를 한 번 더해 WAS 에 낸다.
 
     claim(러너 토큰) → 하트비트 시작(30초) → INPUT_LOAD → 규칙 비교 → CONFIG_DIFF·ANALYZE 이벤트
-    → result(실행 토큰) → 하트비트 멈춤
+    → 모델 검토 한 번(ANALYZE 이벤트) → result(실행 토큰) → 하트비트 멈춤
 
-- 결과는 `simulated=false`(실제 `inputSnapshot` 을 비교한 값), `model=null`(→ WAS 가
-  `aiReviewed=false` 로 계산), `sandbox=null`(이 초안은 작업 공간 컨테이너를 쓰지 않음).
+- 결과는 `simulated=false`(실제 `inputSnapshot` 으로 계산한 값), `sandbox=null`(작업 공간
+  컨테이너를 쓰지 않음). 모델 검토가 되면 `model={id, effort, promptVersion, refusal}`
+  (→ WAS 가 `aiReviewed=true`)과 `origin: "AI"` WARN finding 이 붙는다(`precheck_model.py`).
+- 모델이 실패·거절하거나 마감이 가까우면 규칙 결과만으로 `SUCCEEDED`·`model=null`
+  (SPEC `specs/ai-4-precheck-model-review.md` D-7·D-8·D-9). `--no-model` 이면 처음부터 규칙만.
 - 마감(`deadlineAt`) 1분 전이 지나면 분석 결과 대신 `FAILED`·`DEADLINE` 을 낸다(계약 §7).
 - 스냅숏 모양이 v1 이 아니면 `FAILED`·`INPUT_INVALID`, 그 밖의 예외는 `FAILED`·`RUNNER_ERROR`.
-- 모델·샌드박스를 얹을 자리: `analyze_run()` 하나만 바꾸면 된다(이벤트·제출은 그대로).
 
-실행: `ECHO_WAS_URL=… ECHO_RUNNER_TOKEN=… uv run python -m echo_agent.precheck_runner --once`
+실행: `ECHO_WAS_URL=… ECHO_RUNNER_TOKEN=… ANTHROPIC_API_KEY=… uv run python -m
+echo_agent.precheck_runner --once`
 """
 
 import argparse
@@ -24,7 +27,21 @@ from types import FrameType
 from typing import Any
 
 from echo_agent.events import EventLevel, RunEventLog, RunStep
-from echo_agent.precheck_rules import PrecheckAnalysis, Severity, SnapshotError, analyze
+from echo_agent.precheck_model import (
+    PROMPT_VERSION,
+    ModelConfigError,
+    ModelReview,
+    PrecheckReviewer,
+    ReviewStatus,
+)
+from echo_agent.precheck_rules import (
+    FINDINGS_LIMIT,
+    PrecheckAnalysis,
+    Severity,
+    SnapshotError,
+    analyze,
+    parse_snapshot,
+)
 from echo_agent.was_client import (
     ClaimedRun,
     ResultAlreadySubmittedError,
@@ -62,29 +79,42 @@ class RunOutcome:
     status: str  # SUCCEEDED · FAILED · LOST(마감·취소로 WAS 가 닫음) · ALREADY_SUBMITTED
     failure_code: str | None
     submitted: bool
+    review: str | None = None  # 모델 검토 상태(ReviewStatus 값), 모델을 안 쓰면 None
 
 
 # ---------------------------------------------------------------- 결과 만들기
 
 
 def analyze_run(run: ClaimedRun) -> PrecheckAnalysis:
-    """실행 하나의 분석. 지금은 규칙 비교뿐이다(모델 분석을 얹을 자리)."""
+    """실행 하나의 규칙 분석(모델 없음). 모델 검토는 `_review_with_events` 가 그 뒤에 더한다."""
     return analyze(run.input_snapshot)
 
 
 def build_result(
-    analysis: PrecheckAnalysis | None, *, status: str, failure_code: str | None
+    analysis: PrecheckAnalysis | None,
+    *,
+    status: str,
+    failure_code: str | None,
+    review: ModelReview | None = None,
 ) -> dict[str, Any]:
-    """`RunResult`(echo-was SPEC §5.3). WAS 는 모르는 칸을 422 로 거절하므로 칸을 더하지 않는다."""
+    """`RunResult`(echo-was SPEC §5.3). WAS 는 모르는 칸을 422 로 거절하므로 칸을 더하지 않는다.
+
+    규칙 findings 를 먼저 두고, 모델 검토가 됐을 때만 AI findings·`model` 을 붙인다.
+    """
+    findings = [f.to_json() for f in analysis.findings] if analysis else []
+    model = None
+    if analysis is not None and review is not None and review.model is not None:
+        model = review.model.to_json()
+        findings += [f.to_json() for f in review.findings]
     return {
         "status": status,
         "failureCode": failure_code,
         "simulated": False,
         "sandbox": None,
-        "model": None,
+        "model": model,
         "configDiff": [d.to_json() for d in analysis.config_diff] if analysis else [],
         "featureGaps": [],
-        "findings": [f.to_json() for f in analysis.findings] if analysis else [],
+        "findings": findings[:FINDINGS_LIMIT],
         "patches": [],
         "blockedAttempts": [],
     }
@@ -162,8 +192,12 @@ def process_run(
     clock: Clock = _utc_now,
     heartbeat_interval: float = HEARTBEAT_INTERVAL_SECONDS,
     log: Logger = _stderr,
+    reviewer: PrecheckReviewer | None = None,
 ) -> RunOutcome:
-    """가져간 실행 하나를 끝까지 처리한다. 예외를 밖으로 내지 않는다."""
+    """가져간 실행 하나를 끝까지 처리한다. 예외를 밖으로 내지 않는다.
+
+    `reviewer` 가 없으면 규칙 비교만 한다(`--no-model`, PR #14 동작).
+    """
     heartbeat = Heartbeat(client, run, interval=heartbeat_interval, log=log)
     sender = _EventSender(client, run, log)
     # 첫 하트비트가 CLAIMED → RUNNING 을 만든다(echo-was AD-2).
@@ -173,16 +207,23 @@ def process_run(
     heartbeat.start()
     try:
         analysis, status, failure_code = _analyze_with_events(run, sender)
+        review = None
+        if analysis is not None and reviewer is not None and not heartbeat.lost.is_set():
+            # 모델 호출이 길어도 하트비트 스레드가 임대를 늘린다.
+            review = _review_with_events(run, analysis, reviewer, sender, clock)
+        review_status = review.status.value if review else None
         if heartbeat.lost.is_set():
-            return RunOutcome(run.id, "LOST", None, submitted=False)
+            return RunOutcome(run.id, "LOST", None, submitted=False, review=review_status)
         if clock() >= run.deadline_at - DEADLINE_MARGIN:
             sender.events.add(RunStep.ANALYZE, "deadline reached before result", EventLevel.ERROR)
-            analysis, status, failure_code = None, "FAILED", FAILURE_DEADLINE
+            analysis, status, failure_code, review = None, "FAILED", FAILURE_DEADLINE, None
         sender.flush()
         stored = client.submit_result(
-            run, build_result(analysis, status=status, failure_code=failure_code)
+            run, build_result(analysis, status=status, failure_code=failure_code, review=review)
         )
-        return RunOutcome(run.id, stored or status, failure_code, submitted=True)
+        return RunOutcome(
+            run.id, stored or status, failure_code, submitted=True, review=review_status
+        )
     except RunNotActiveError:
         return RunOutcome(run.id, "LOST", None, submitted=False)
     except ResultAlreadySubmittedError:
@@ -233,10 +274,68 @@ def _analyze_with_events(
         EventLevel.WARN if analysis.warning_count else EventLevel.INFO,
         findings=len(analysis.findings),
         warnings=analysis.warning_count,
-        model="none",
+        origin="RULE",
     )
     sender.flush()
     return analysis, "SUCCEEDED", None
+
+
+def _review_with_events(
+    run: ClaimedRun,
+    analysis: PrecheckAnalysis,
+    reviewer: PrecheckReviewer,
+    sender: _EventSender,
+    clock: Clock,
+) -> ModelReview:
+    """모델 검토 한 번. 실패·거절·마감 임박이면 AI 항목 없이 돌려준다(실행은 성공으로 닫힘)."""
+    events = sender.events
+    seconds_left = (run.deadline_at - clock()).total_seconds()
+    if reviewer.timeout_for(seconds_left) is not None:
+        events.add(
+            RunStep.ANALYZE,
+            "model review started",
+            model=reviewer.model,
+            effort=reviewer.effort,
+            promptVersion=PROMPT_VERSION,
+        )
+        sender.flush()
+    review = reviewer.review(
+        run.input_snapshot,
+        parse_snapshot(run.input_snapshot),
+        analysis,
+        seconds_left=seconds_left,
+    )
+    if review.status is ReviewStatus.REVIEWED:
+        events.add(
+            RunStep.ANALYZE,
+            "model review finished",
+            EventLevel.WARN if review.warning_count else EventLevel.INFO,
+            warnings=review.warning_count,
+            **review.detail,
+        )
+    elif review.status is ReviewStatus.REFUSED:
+        events.add(
+            RunStep.ANALYZE,
+            "model declined; no AI review for this run",
+            EventLevel.WARN,
+            **review.detail,
+        )
+    elif review.status is ReviewStatus.SKIPPED:
+        events.add(
+            RunStep.ANALYZE,
+            "model review skipped; deadline too close",
+            EventLevel.WARN,
+            **review.detail,
+        )
+    else:
+        events.add(
+            RunStep.ANALYZE,
+            "model review failed; rule result only",
+            EventLevel.WARN,
+            **review.detail,
+        )
+    sender.flush()
+    return review
 
 
 def _schema_version(snapshot: Mapping[str, Any]) -> Any:
@@ -254,6 +353,7 @@ def run_loop(
     stop: threading.Event,
     idle_seconds: float = IDLE_SECONDS,
     log: Logger = _stderr,
+    reviewer: PrecheckReviewer | None = None,
 ) -> int:
     """가져갈 실행이 생길 때마다 처리한다. `--once` 면 한 번 가져가 보고 끝낸다."""
     while not stop.is_set():
@@ -272,10 +372,11 @@ def run_loop(
             stop.wait(idle_seconds)
             continue
         log(f"claimed run={run.id} kind={run.kind} deadline={run.deadline_at.isoformat()}")
-        outcome = process_run(client, run, log=log)
+        outcome = process_run(client, run, log=log, reviewer=reviewer)
         log(
             f"finished run={outcome.run_id} status={outcome.status} "
-            f"failure={outcome.failure_code} submitted={outcome.submitted}"
+            f"failure={outcome.failure_code} submitted={outcome.submitted} "
+            f"model_review={outcome.review or 'off'}"
         )
         if once:
             return 0 if outcome.submitted else 1
@@ -285,9 +386,15 @@ def run_loop(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m echo_agent.precheck_runner",
-        description="모델 없이 출발·도착 환경 설정 차이를 비교해 WAS 사전 점검 결과로 낸다.",
+        description="출발·도착 환경 설정 차이를 규칙으로 비교하고 모델 검토를 더해 WAS 사전 점검 "
+        "결과로 낸다.",
     )
     parser.add_argument("--once", action="store_true", help="한 번만 가져가 보고 끝낸다")
+    parser.add_argument(
+        "--no-model",
+        action="store_true",
+        help="모델을 부르지 않고 규칙 비교만 한다(ANTHROPIC_API_KEY 불필요, 결과 model=null)",
+    )
     parser.add_argument(
         "--runner-name",
         default=os.environ.get("ECHO_RUNNER_NAME", DEFAULT_RUNNER_NAME),
@@ -299,6 +406,14 @@ def main(argv: list[str] | None = None) -> int:
     except WasConfigError as error:
         _stderr(f"config error: {error}")
         return 2
+    reviewer = None
+    if not args.no_model:
+        try:
+            reviewer = PrecheckReviewer.from_env()
+        except ModelConfigError as error:
+            _stderr(f"config error: {error} (규칙만 돌리려면 --no-model)")
+            return 2
+    _stderr(f"model review: {reviewer.model + ' ' + reviewer.effort if reviewer else 'off'}")
 
     stop = threading.Event()
 
@@ -307,7 +422,7 @@ def main(argv: list[str] | None = None) -> int:
 
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
-    return run_loop(client, args.runner_name, once=args.once, stop=stop)
+    return run_loop(client, args.runner_name, once=args.once, stop=stop, reviewer=reviewer)
 
 
 if __name__ == "__main__":
