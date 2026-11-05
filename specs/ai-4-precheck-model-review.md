@@ -108,10 +108,11 @@ PR #14 의 사전 점검 러너가 규칙 비교를 끝낸 뒤 Claude 를 **한 
 | AC-12 | 서비스가 `echo-runner` 로 돌고 재부팅 때 켜진다(`enabled`·`active`) | 통과(11/5 15:24) |
 | AC-13 | 로그에 토큰·키 모양 0건, 다른 사용자가 러너 환경 변수를 못 읽음 | 통과 |
 | AC-14 | `ECHO_PRECHECK_MODEL=off` → 재시작 → `model review: off`, `on` 으로 되돌림 | 통과 |
-| AC-15 | 상시 실행 중 화면에서 만든 점검이 사람 조작 없이 처리된다 | 다음 점검 때 확인(형래 님) |
+| AC-15 | 상시 실행 중 화면에서 만든 점검이 사람 조작 없이 처리된다 | **통과(11/5 15:36)**, 아래 기록 |
 
 | 시각 (KST) | 무엇 | 결과 |
 |---|---|---|
 | 11/5 15:2x | main `5fd3341`(+ `deploy/` `303db99`) 를 `/opt/echo-ai-agent/releases/5fd3341` 에 설치, `uv sync --frozen --no-dev`, 사용자 `echo-runner` 생성, 유닛·환경 파일 설치, `systemd-analyze verify` | 통과. `echo-runner` 로 import 확인 |
 | 11/5 15:24 | `systemctl enable --now echo-precheck-runner` | `active`, 재시작 0, `model review: claude-opus-5-5 medium`(비밀 읽기 성공), claim 오류 0 |
 | 11/5 15:2x | 모델 끄기·켜기(환경 파일 + 재시작) | `off` → `claude-opus-5-5 medium`, 마지막 상태 `on`·`active`·`enabled` |
+| 11/5 15:36 | **AC-15:** 형래 님이 화면에서 점검 `86df11bc-3a26-4d69-b935-1b2ad9a74be0` 생성, 사람 조작 없음 | 15:36:46 요청 → 15:36:48 러너가 가져감(입력 불러옴) → 15:37:15 결과 제출(29초). `SUCCEEDED`·`model_review=REVIEWED`·`claude-opus-5-5`, 발견 12·설정 차이 8(화면). 러너 로그와 같음, 재시작 0, 로그 토큰·키 0건. 상시 러너의 모델 호출 1회(D-14) |
