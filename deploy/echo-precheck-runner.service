@@ -1,0 +1,58 @@
+# /etc/systemd/system/echo-precheck-runner.service
+# echo-ai-agent 사전 점검 러너를 샌드박스 VM 에서 계속 켜 둔다(SPEC specs/ai-4-precheck-model-review.md 8절).
+# 켜기·끄기·모델 끄기·로그: README "VM 상시 실행". 이 파일과 환경 파일에는 비밀이 없다
+# (시작 스크립트가 Secret Manager 에서 읽어 이 프로세스의 환경 변수로만 넘긴다).
+
+[Unit]
+Description=EchoPort AI precheck runner (echo-ai-agent)
+Documentation=https://github.com/Softbank-Hackathon-2026-Team-Echo/echo-ai-agent/blob/main/README.md
+Wants=network-online.target
+After=network-online.target
+# 계속 죽으면 5분에 5번까지만 다시 띄운다.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=echo-runner
+Group=echo-runner
+EnvironmentFile=/etc/echo-precheck-runner/runner.env
+Environment=CLOUDSDK_CONFIG=/var/lib/echo-precheck-runner/gcloud
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=/opt/echo-ai-agent/current
+ExecStart=/opt/echo-ai-agent/current/deploy/precheck-runner-start.sh
+Restart=always
+RestartSec=10
+# 2 = 설정 오류(환경 변수·키 없음). 다시 띄워도 낫지 않는다.
+RestartPreventExitStatus=2
+# SIGTERM 이면 지금 처리 중인 실행을 끝내고 멈춘다(모델 호출 포함 몇 분).
+TimeoutStopSec=300
+StateDirectory=echo-precheck-runner
+StateDirectoryMode=0700
+
+# 가두기: 쓰기는 StateDirectory 와 서비스 전용 /tmp 뿐, 권한 상승·장치·커널 설정 접근 없음.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+UMask=0077
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

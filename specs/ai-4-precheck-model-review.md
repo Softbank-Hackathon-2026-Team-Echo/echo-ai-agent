@@ -68,6 +68,14 @@ PR #14 의 사전 점검 러너가 규칙 비교를 끝낸 뒤 Claude 를 **한 
 | AC-10 | PR #14 의 기존 시험이 그대로 통과한다 | `tests/test_precheck_rules.py`, `tests/test_was_client.py` |
 | AC-11 | 로컬 가짜 WAS + 실제 모델 1회: `SUCCEEDED`·`model.id` 채워짐·AI WARN 1건 이상 | **통과(11/5 13:56 KST)**, 아래 7절 |
 
+## 6. 리스크
+
+- **R-a 프롬프트 주입:** 고객이 쓴 설정 값이 모델에 들어간다 → D-4. 모델은 판정을 바꾸지 못하고(AI finding 은 늘 WARN, 게이트는 내용을 보지 않음), 도구가 없어 할 수 있는 일은 경고 문구뿐이다. 문구는 사람이 확인한다.
+- **R-b 모델이 규칙 결과를 되풀이:** 프롬프트에 "규칙이 이미 말한 것은 새 근거가 있을 때만"을 적는다. 고정 시나리오로 돌려 보고 `precheck-v2` 로 고친다.
+- **R-c 비용:** 1회 입력 수천·출력 수천 토큰(생각 포함, 약 $0.05~0.15 추정). 실행은 사람이 만들 때만 생기고 `max_tokens`·재시도 1번이 상한이다.
+- **R-d 지연:** 호출이 길어도 하트비트 스레드가 임대를 늘리고, D-9 가 마감을 지킨다. 재난 장면에서 화면이 수십 초 기다릴 수 있다.
+- **R-e fallback:** 거절 분류에 따라 다른 모델이 답할 수 있다 → D-10 으로 실제 모델을 남긴다.
+
 ## 7. 확인 기록
 
 | 시각 (KST) | 무엇 | 결과 |
@@ -83,10 +91,27 @@ PR #14 의 사전 점검 러너가 규칙 비교를 끝낸 뒤 Claude 를 **한 
 
 - 실제 모델 호출 누계: **2회**(C1 로컬 1 + C2 운영 1, 허락분 모두 사용).
 
-## 6. 리스크
+## 8. VM 상시 실행 (C3)
 
-- **R-a 프롬프트 주입:** 고객이 쓴 설정 값이 모델에 들어간다 → D-4. 모델은 판정을 바꾸지 못하고(AI finding 은 늘 WARN, 게이트는 내용을 보지 않음), 도구가 없어 할 수 있는 일은 경고 문구뿐이다. 문구는 사람이 확인한다.
-- **R-b 모델이 규칙 결과를 되풀이:** 프롬프트에 "규칙이 이미 말한 것은 새 근거가 있을 때만"을 적는다. 고정 시나리오로 돌려 보고 `precheck-v2` 로 고친다.
-- **R-c 비용:** 1회 입력 수천·출력 수천 토큰(생각 포함, 약 $0.05~0.15 추정). 실행은 사람이 만들 때만 생기고 `max_tokens`·재시도 1번이 상한이다.
-- **R-d 지연:** 호출이 길어도 하트비트 스레드가 임대를 늘리고, D-9 가 마감을 지킨다. 재난 장면에서 화면이 수십 초 기다릴 수 있다.
-- **R-e fallback:** 거절 분류에 따라 다른 모델이 답할 수 있다 → D-10 으로 실제 모델을 남긴다.
+재난 흐름(11/5 결정)에서 사람이 화면에서 점검을 만들면 러너가 바로 가져가야 한다. 꺼져 있으면 점검이 `QUEUED` 에 머물다 `TIMED_OUT` 이 되고 승인 단계가 멈춘다. 운영 방법은 README "VM 상시 실행".
+
+| ID | 결정 | 출처 |
+|---|---|---|
+| D-13 | 샌드박스 VM `echo-sandbox-runner` 의 systemd 서비스 `echo-precheck-runner`(`Restart=always`, 10초 뒤, 5분에 5번까지, 종료 코드 2 = 설정 오류는 다시 띄우지 않음, `enable` 로 부팅 때 시작). VM Terraform 은 고치지 않는다 | 계획서 C3 |
+| D-14 | **모델 호출은 점검 실행마다 1회**(켜져 있는 동안 사람 허락을 실행마다 받지 않음). `/etc/echo-precheck-runner/runner.env` 의 `ECHO_PRECHECK_MODEL=off` + 재시작으로 바로 끈다(`--no-model`, 키를 읽지도 않음) | 형래 님(11/5) |
+| D-15 | 코드는 **main 고정 커밋**을 `git archive` 로 `/opt/echo-ai-agent/releases/<sha>` 에 두고 `current` 링크로 고른다. 파이썬·uv·`.venv` 모두 `/opt` 아래(root 소유, 서비스는 읽기만). 사람 홈에 기대지 않는다 | 형래 님(11/5), AI-default |
+| D-16 | 서비스 사용자는 전용 시스템 사용자 `echo-runner`(로그인·홈·sudo·docker 그룹 없음). 쓰기는 `StateDirectory`(gcloud 설정)와 전용 `/tmp` 뿐(`ProtectSystem=strict`·`ProtectHome`·`NoNewPrivileges`·권한 0·`MemoryMax=1G` 등) | AI-default |
+| D-17 | 비밀은 시작 스크립트가 VM SA 로 Secret Manager 에서 읽어 러너 프로세스 환경 변수로만 넘긴다. 유닛·환경 파일·로그에 없다. VM SA 는 VM 의 어느 프로세스든 쓸 수 있으므로 사용자 분리는 비밀 범위를 좁히지 않는다(러너를 가두는 효과만) | AI #1 AD-4, echo-infra `ai-sandbox-network` D-5 |
+
+| AC | 확인 | 결과 |
+|---|---|---|
+| AC-12 | 서비스가 `echo-runner` 로 돌고 재부팅 때 켜진다(`enabled`·`active`) | 통과(11/5 15:24) |
+| AC-13 | 로그에 토큰·키 모양 0건, 다른 사용자가 러너 환경 변수를 못 읽음 | 통과 |
+| AC-14 | `ECHO_PRECHECK_MODEL=off` → 재시작 → `model review: off`, `on` 으로 되돌림 | 통과 |
+| AC-15 | 상시 실행 중 화면에서 만든 점검이 사람 조작 없이 처리된다 | 다음 점검 때 확인(형래 님) |
+
+| 시각 (KST) | 무엇 | 결과 |
+|---|---|---|
+| 11/5 15:2x | main `5fd3341`(+ `deploy/` `303db99`) 를 `/opt/echo-ai-agent/releases/5fd3341` 에 설치, `uv sync --frozen --no-dev`, 사용자 `echo-runner` 생성, 유닛·환경 파일 설치, `systemd-analyze verify` | 통과. `echo-runner` 로 import 확인 |
+| 11/5 15:24 | `systemctl enable --now echo-precheck-runner` | `active`, 재시작 0, `model review: claude-opus-5-5 medium`(비밀 읽기 성공), claim 오류 0 |
+| 11/5 15:2x | 모델 끄기·켜기(환경 파일 + 재시작) | `off` → `claude-opus-5-5 medium`, 마지막 상태 `on`·`active`·`enabled` |
