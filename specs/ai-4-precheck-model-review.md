@@ -24,11 +24,13 @@ PR #14 의 사전 점검 러너가 규칙 비교를 끝낸 뒤 Claude 를 **한 
 ## 3. 범위
 
 ### 3.1 이번에 한다
+- **이슈 #4 완료 기준 중 이번 범위: 설정 차이 + 경고 1건 이상 + 조치 안내까지.** 나머지(권한·쿼터·버전·스토리지·복제 `wal_level` 점검)는 3.2 를 본다.
 - `src/echo_agent/precheck_model.py`: 보낼 입력 만들기(허용 목록), 프롬프트, 호출 한 번, 출력 검사, AI finding 변환
 - `src/echo_agent/precheck_runner.py`: 규칙 분석 뒤 모델 검토 연결, `model` 칸, ANALYZE 이벤트, `--no-model`, 시작할 때 키 확인
 - 시험(가짜 모델, 네트워크 없음), README 실행법
 
 ### 3.2 하지 않는다
+- 이슈 #4 완료 기준의 **권한·쿼터·버전·스토리지·복제(`wal_level`) 점검.** WAS `inputSnapshot` 에 재료(칸)가 없어 이번에는 하지 않는다. 스냅숏에 칸이 생긴 뒤(WAS 쪽, 마감 뒤) 한다(형래 님 11/5).
 - 도구·작업 공간 컨테이너를 쓰는 분석, 수정안(AI #5)
 - 운영 WAS 에서 실행(C2)·VM 상시 실행(C3)·계약 부록 A 문구 수정(C4)
 - AI findings 를 WAS findings 표·매트릭스에 넣기(echo-was 다음 PR)
