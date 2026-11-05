@@ -77,7 +77,11 @@ PR #14 의 사전 점검 러너가 규칙 비교를 끝낸 뒤 Claude 를 **한 
 | 11/5 13:58 | 같은 결과·이벤트를 echo-was `origin/main`(`65b71d3`)의 `RunResultRequest`·`SubmitRunEventsRequest` 로 검사(읽기 전용 사본) | 둘 다 통과, `aiReviewed=True`, `model_id=claude-opus-5-5` |
 
 - AI 경고 예(요지): 출발 ACM 인증서는 GCP 로 옮길 수 없어 도착 TLS 준비가 필요 · GKE 헬스 체크 경로가 `/health` 가 아닐 수 있음 · 공유 ALB 그룹(`ingressGroup`)과 도착 인그레스 클래스 미정 · `roleArn` 에 대응하는 GCP 워크로드 ID 없음 · 이미지 레지스트리(ECR) 접근 · `DATABASE_URL`·`REDIS_URL` 이 AWS 내부 자원을 가리킬 위험. 모두 입력의 키를 근거로 들었고, 모르는 것은 "입력으로 알 수 없음"이라고 적었다.
-- 실제 모델 호출 누계: **1회**(C2 운영 1회 남음).
+| 11/5 14:2x | **C2 준비**(샌드박스 VM `echo-sandbox-runner`, IAP SSH): `f107b46` 을 `~/echo-ai-agent-c2` 로 복사, `uv sync --frozen`, VM 에서 `pytest` | 100개 통과(Docker 포함). 비밀 2개(러너 토큰·Anthropic 키)는 VM SA 로 읽힘·형식 맞음(값 출력 0) |
+| 11/5 14:21 | 사전 확인 `--once --no-model`(운영 `https://api.echoport.uk`) | `no queued run`, 종료 코드 0 → 연결·러너 토큰·러너 이름 정상, 바뀐 것 없음 |
+| 11/5 15:14 | **C2 운영 1회**(실제 모델 호출 2회째): 형래 님이 화면에서 사전 점검 `86261c6a-def3-46aa-a8e8-6cfbbb051d88` 생성 → VM 에서 `python -m echo_agent.precheck_runner --once`. 키·러너 토큰은 Secret Manager 에서 환경 변수로만 | 34초(06:14:46Z~06:15:20Z), 그 실행을 가져가 `SUCCEEDED`·`submitted=True`·`model_review=REVIEWED`, 종료 코드 0. WAS 가 결과를 받음(422 없음) |
+
+- 실제 모델 호출 누계: **2회**(C1 로컬 1 + C2 운영 1, 허락분 모두 사용).
 
 ## 6. 리스크
 
