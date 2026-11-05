@@ -1,0 +1,314 @@
+"""러프 사전 점검 러너(AI 에이전트 4 초안): 모델 없이 설정 차이만 비교해 WAS 에 낸다.
+
+    claim(러너 토큰) → 하트비트 시작(30초) → INPUT_LOAD → 규칙 비교 → CONFIG_DIFF·ANALYZE 이벤트
+    → result(실행 토큰) → 하트비트 멈춤
+
+- 결과는 `simulated=false`(실제 `inputSnapshot` 을 비교한 값), `model=null`(→ WAS 가
+  `aiReviewed=false` 로 계산), `sandbox=null`(이 초안은 작업 공간 컨테이너를 쓰지 않음).
+- 마감(`deadlineAt`) 1분 전이 지나면 분석 결과 대신 `FAILED`·`DEADLINE` 을 낸다(계약 §7).
+- 스냅숏 모양이 v1 이 아니면 `FAILED`·`INPUT_INVALID`, 그 밖의 예외는 `FAILED`·`RUNNER_ERROR`.
+- 모델·샌드박스를 얹을 자리: `analyze_run()` 하나만 바꾸면 된다(이벤트·제출은 그대로).
+
+실행: `ECHO_WAS_URL=… ECHO_RUNNER_TOKEN=… uv run python -m echo_agent.precheck_runner --once`
+"""
+
+import argparse
+import os
+import signal
+import sys
+import threading
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from types import FrameType
+from typing import Any
+
+from echo_agent.events import EventLevel, RunEventLog, RunStep
+from echo_agent.precheck_rules import PrecheckAnalysis, Severity, SnapshotError, analyze
+from echo_agent.was_client import (
+    ClaimedRun,
+    ResultAlreadySubmittedError,
+    RunNotActiveError,
+    WasClient,
+    WasConfigError,
+    WasError,
+)
+
+DEFAULT_RUNNER_NAME = "echo-sandbox-runner"
+HEARTBEAT_INTERVAL_SECONDS = 30.0
+DEADLINE_MARGIN = timedelta(minutes=1)
+IDLE_SECONDS = 5.0
+
+FAILURE_DEADLINE = "DEADLINE"
+FAILURE_INPUT_INVALID = "INPUT_INVALID"
+FAILURE_KIND_UNSUPPORTED = "KIND_UNSUPPORTED"
+FAILURE_RUNNER_ERROR = "RUNNER_ERROR"
+
+Clock = Callable[[], datetime]
+Logger = Callable[[str], None]
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _stderr(message: str) -> None:
+    print(f"[precheck-runner] {message}", file=sys.stderr, flush=True)
+
+
+@dataclass(frozen=True)
+class RunOutcome:
+    run_id: str
+    status: str  # SUCCEEDED · FAILED · LOST(마감·취소로 WAS 가 닫음) · ALREADY_SUBMITTED
+    failure_code: str | None
+    submitted: bool
+
+
+# ---------------------------------------------------------------- 결과 만들기
+
+
+def analyze_run(run: ClaimedRun) -> PrecheckAnalysis:
+    """실행 하나의 분석. 지금은 규칙 비교뿐이다(모델 분석을 얹을 자리)."""
+    return analyze(run.input_snapshot)
+
+
+def build_result(
+    analysis: PrecheckAnalysis | None, *, status: str, failure_code: str | None
+) -> dict[str, Any]:
+    """`RunResult`(echo-was SPEC §5.3). WAS 는 모르는 칸을 422 로 거절하므로 칸을 더하지 않는다."""
+    return {
+        "status": status,
+        "failureCode": failure_code,
+        "simulated": False,
+        "sandbox": None,
+        "model": None,
+        "configDiff": [d.to_json() for d in analysis.config_diff] if analysis else [],
+        "featureGaps": [],
+        "findings": [f.to_json() for f in analysis.findings] if analysis else [],
+        "patches": [],
+        "blockedAttempts": [],
+    }
+
+
+# ---------------------------------------------------------------- 하트비트
+
+
+class Heartbeat:
+    """`interval` 마다 임대를 늘린다. 실행이 닫히면(`RUN_NOT_ACTIVE`) `lost` 를 세운다."""
+
+    def __init__(self, client: WasClient, run: ClaimedRun, *, interval: float, log: Logger) -> None:
+        self._client = client
+        self._run = run
+        self._interval = interval
+        self._log = log
+        self._stop = threading.Event()
+        self.lost = threading.Event()
+        self._thread = threading.Thread(target=self._loop, name=f"heartbeat-{run.id}", daemon=True)
+
+    def beat(self) -> None:
+        try:
+            self._client.heartbeat(self._run)
+        except RunNotActiveError:
+            self.lost.set()
+            self._stop.set()
+        except (WasError, OSError) as error:
+            # 한 번 실패는 넘긴다. 임대(60초) 안에 다음 하트비트가 다시 늘린다.
+            self._log(f"heartbeat failed run={self._run.id}: {type(error).__name__} {error}")
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=self._interval + 5)
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self._interval):
+            self.beat()
+
+
+# ---------------------------------------------------------------- 실행 하나
+
+
+class _EventSender:
+    """쌓인 이벤트 중 아직 안 보낸 것만 보낸다. 실패해도 결과 제출은 계속한다."""
+
+    def __init__(self, client: WasClient, run: ClaimedRun, log: Logger) -> None:
+        self.events = RunEventLog(run.id)
+        self._client = client
+        self._run = run
+        self._log = log
+        self._sent = 0
+
+    def flush(self) -> None:
+        pending = [event.to_json() for event in self.events.events[self._sent :]]
+        if not pending:
+            return
+        try:
+            self._client.send_events(self._run, pending)
+        except RunNotActiveError:
+            raise
+        except (WasError, OSError) as error:
+            self._log(f"events failed run={self._run.id}: {type(error).__name__} {error}")
+            return
+        self._sent = len(self.events.events)
+
+
+def process_run(
+    client: WasClient,
+    run: ClaimedRun,
+    *,
+    clock: Clock = _utc_now,
+    heartbeat_interval: float = HEARTBEAT_INTERVAL_SECONDS,
+    log: Logger = _stderr,
+) -> RunOutcome:
+    """가져간 실행 하나를 끝까지 처리한다. 예외를 밖으로 내지 않는다."""
+    heartbeat = Heartbeat(client, run, interval=heartbeat_interval, log=log)
+    sender = _EventSender(client, run, log)
+    # 첫 하트비트가 CLAIMED → RUNNING 을 만든다(echo-was AD-2).
+    heartbeat.beat()
+    if heartbeat.lost.is_set():
+        return RunOutcome(run.id, "LOST", None, submitted=False)
+    heartbeat.start()
+    try:
+        analysis, status, failure_code = _analyze_with_events(run, sender)
+        if heartbeat.lost.is_set():
+            return RunOutcome(run.id, "LOST", None, submitted=False)
+        if clock() >= run.deadline_at - DEADLINE_MARGIN:
+            sender.events.add(RunStep.ANALYZE, "deadline reached before result", EventLevel.ERROR)
+            analysis, status, failure_code = None, "FAILED", FAILURE_DEADLINE
+        sender.flush()
+        stored = client.submit_result(
+            run, build_result(analysis, status=status, failure_code=failure_code)
+        )
+        return RunOutcome(run.id, stored or status, failure_code, submitted=True)
+    except RunNotActiveError:
+        return RunOutcome(run.id, "LOST", None, submitted=False)
+    except ResultAlreadySubmittedError:
+        return RunOutcome(run.id, "ALREADY_SUBMITTED", None, submitted=False)
+    except (WasError, OSError) as error:
+        log(f"result failed run={run.id}: {type(error).__name__} {error}")
+        return RunOutcome(run.id, "FAILED", FAILURE_RUNNER_ERROR, submitted=False)
+    finally:
+        heartbeat.stop()
+
+
+def _analyze_with_events(
+    run: ClaimedRun, sender: _EventSender
+) -> tuple[PrecheckAnalysis | None, str, str | None]:
+    events = sender.events
+    if run.kind != "PRECHECK":
+        events.add(RunStep.INPUT_LOAD, "run kind not supported", EventLevel.ERROR, kind=run.kind)
+        return None, "FAILED", FAILURE_KIND_UNSUPPORTED
+    events.add(
+        RunStep.INPUT_LOAD,
+        "input snapshot loaded",
+        inputHash=run.input_hash,
+        schemaVersion=_schema_version(run.input_snapshot),
+    )
+    sender.flush()
+    try:
+        analysis = analyze_run(run)
+    except SnapshotError as error:
+        events.add(
+            RunStep.INPUT_LOAD, "input snapshot rejected", EventLevel.ERROR, error=str(error)
+        )
+        return None, "FAILED", FAILURE_INPUT_INVALID
+    except Exception as error:  # noqa: BLE001 — 어떤 실패든 FAILED 결과로 닫는다
+        events.add(RunStep.ANALYZE, "precheck failed", EventLevel.ERROR, error=type(error).__name__)
+        return None, "FAILED", FAILURE_RUNNER_ERROR
+
+    warn_diffs = sum(1 for d in analysis.config_diff if d.severity is Severity.WARN)
+    events.add(
+        RunStep.CONFIG_DIFF,
+        "config diff computed",
+        EventLevel.WARN if warn_diffs else EventLevel.INFO,
+        differences=len(analysis.config_diff),
+        warnings=warn_diffs,
+    )
+    events.add(
+        RunStep.ANALYZE,
+        "rule findings built",
+        EventLevel.WARN if analysis.warning_count else EventLevel.INFO,
+        findings=len(analysis.findings),
+        warnings=analysis.warning_count,
+        model="none",
+    )
+    sender.flush()
+    return analysis, "SUCCEEDED", None
+
+
+def _schema_version(snapshot: Mapping[str, Any]) -> Any:
+    return snapshot.get("schemaVersion") if isinstance(snapshot, Mapping) else None
+
+
+# ---------------------------------------------------------------- 루프·명령줄
+
+
+def run_loop(
+    client: WasClient,
+    runner_name: str,
+    *,
+    once: bool,
+    stop: threading.Event,
+    idle_seconds: float = IDLE_SECONDS,
+    log: Logger = _stderr,
+) -> int:
+    """가져갈 실행이 생길 때마다 처리한다. `--once` 면 한 번 가져가 보고 끝낸다."""
+    while not stop.is_set():
+        try:
+            run = client.claim(runner_name)
+        except (WasError, OSError) as error:
+            log(f"claim failed: {type(error).__name__} {error}")
+            if once:
+                return 1
+            stop.wait(idle_seconds)
+            continue
+        if run is None:
+            if once:
+                log("no queued run")
+                return 0
+            stop.wait(idle_seconds)
+            continue
+        log(f"claimed run={run.id} kind={run.kind} deadline={run.deadline_at.isoformat()}")
+        outcome = process_run(client, run, log=log)
+        log(
+            f"finished run={outcome.run_id} status={outcome.status} "
+            f"failure={outcome.failure_code} submitted={outcome.submitted}"
+        )
+        if once:
+            return 0 if outcome.submitted else 1
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="python -m echo_agent.precheck_runner",
+        description="모델 없이 출발·도착 환경 설정 차이를 비교해 WAS 사전 점검 결과로 낸다.",
+    )
+    parser.add_argument("--once", action="store_true", help="한 번만 가져가 보고 끝낸다")
+    parser.add_argument(
+        "--runner-name",
+        default=os.environ.get("ECHO_RUNNER_NAME", DEFAULT_RUNNER_NAME),
+        help="러너 토큰을 발급할 때 쓴 이름(WAS 가 토큰 이름과 대조)",
+    )
+    args = parser.parse_args(argv)
+    try:
+        client = WasClient.from_env()
+    except WasConfigError as error:
+        _stderr(f"config error: {error}")
+        return 2
+
+    stop = threading.Event()
+
+    def _handle_signal(signum: int, frame: FrameType | None) -> None:
+        stop.set()
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+    return run_loop(client, args.runner_name, once=args.once, stop=stop)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
