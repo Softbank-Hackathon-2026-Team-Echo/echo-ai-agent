@@ -63,7 +63,7 @@ WAS 사전 점검 실행을 가져가 출발·도착 환경 설정 차이를 규
    uv run python -m echo_agent.precheck_runner --once   # 한 번 가져가 보고 끝(실행이 없으면 종료 코드 0)
    uv run python -m echo_agent.precheck_runner          # 계속: 실행이 없으면 5초 뒤 다시, SIGTERM 으로 멈춤
    uv run python -m echo_agent.precheck_runner --once --no-model   # 모델 없이 규칙만(과금 없음)
-   uv run python -m echo_agent.precheck_runner --once --no-patch   # 규칙 패치 끔. WAS 가 patches[].origin 을 받기 전(S1 배포 전)에는 꼭 붙인다(없으면 결과 전체 422)
+   uv run python -m echo_agent.precheck_runner --once --no-patch   # 규칙 패치 끔(S1 배포 전에는 꼭 붙인다. VM 서비스는 아래 "규칙 패치 켜기·끄기")
    ```
 
    규칙 패치의 대상과 규칙: [시나리오 사본 README](scenarios/demo-app-0ff0d44/README.md).
@@ -121,6 +121,24 @@ sudo sed -i 's/^ECHO_PRECHECK_MODEL=.*/ECHO_PRECHECK_MODEL=on/' /etc/echo-preche
   && sudo systemctl restart echo-precheck-runner
 # 확인: 마지막 줄이 "model review: off" 또는 "model review: claude-opus-5-5 medium"
 sudo journalctl -u echo-precheck-runner -o cat | grep 'model review:' | tail -1
+```
+
+### 규칙 패치 켜기·끄기
+
+기본은 끔(`ECHO_PRECHECK_PATCH=off`, `--no-patch`)이다. WAS 가 `patches[].origin` 을 받기 전(S1 배포 전)에 켜면 패치가 실린 점검 결과가 통째로 422 가 되어 C-AI-1 증거가 끊기므로, S1 배포 뒤에만 켠다. 이 설정이 생기기 전에 설치한 VM 의 `runner.env` 에는 줄이 없어 `sed` 가 아무것도 바꾸지 않으니, 첫 줄로 먼저 더한다.
+
+```bash
+# 줄이 없으면 더하기(한 번)
+grep -q '^ECHO_PRECHECK_PATCH=' /etc/echo-precheck-runner/runner.env \
+  || echo 'ECHO_PRECHECK_PATCH=off' | sudo tee -a /etc/echo-precheck-runner/runner.env >/dev/null
+# 켜기(S1 배포 뒤에만)
+sudo sed -i 's/^ECHO_PRECHECK_PATCH=.*/ECHO_PRECHECK_PATCH=on/' /etc/echo-precheck-runner/runner.env \
+  && sudo systemctl restart echo-precheck-runner
+# 끄기
+sudo sed -i 's/^ECHO_PRECHECK_PATCH=.*/ECHO_PRECHECK_PATCH=off/' /etc/echo-precheck-runner/runner.env \
+  && sudo systemctl restart echo-precheck-runner
+# 확인: 마지막 줄이 "rule patch: on" 또는 "rule patch: off"
+sudo journalctl -u echo-precheck-runner -o cat | grep 'rule patch:' | tail -1
 ```
 
 ### 로그 보기

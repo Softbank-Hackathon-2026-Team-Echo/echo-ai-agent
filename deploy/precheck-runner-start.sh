@@ -29,5 +29,16 @@ case "${ECHO_PRECHECK_MODEL:-on}" in
     exit 2
     ;;
 esac
+case "${ECHO_PRECHECK_PATCH:-off}" in
+  on)
+    ;;
+  off)
+    args+=(--no-patch)
+    ;;
+  *)
+    echo "ECHO_PRECHECK_PATCH must be on or off" >&2
+    exit 2
+    ;;
+esac
 
 exec "$APP_DIR/.venv/bin/python" -m echo_agent.precheck_runner "${args[@]}"
