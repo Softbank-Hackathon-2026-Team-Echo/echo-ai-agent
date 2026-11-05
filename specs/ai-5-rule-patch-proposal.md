@@ -36,9 +36,10 @@
 
 ## 4. 규칙 R-PIP-1 정의
 
-**발동 조건(둘 다 참일 때만):**
+**발동 조건(셋 다 참일 때만):**
 1. 입력 스냅숏 `findings[]`에 `controlId == "C-IMG-1"`이고 `result != "PASS"`인 항목이 하나 이상 있다(FAIL·WARN·UNKNOWN 등).
-2. 시나리오 사본 Dockerfile의 마지막 단계(마지막 `FROM` 뒤)에 `pip uninstall`이 없다(이미 고쳐진 사본이면 내지 않는다).
+2. 시나리오 사본 Dockerfile의 마지막 단계(마지막 `FROM` 뒤)에 pip 자신을 지우는 `pip uninstall … pip`이 없다(이미 고쳐진 사본이면 내지 않는다. 다른 패키지만 지우는 `pip uninstall`은 고친 것으로 보지 않는다).
+3. (리뷰 반영) 사본과 같은 이미지·서비스의 점검이다: 출발·도착 `imageDigest` 중 하나가 허용 목록(echo-demo-app `0ff0d44` GHCR 이미지 `sha256:3a8211ce…`)에 있거나, `service.name`이 `demo`(WAS 시연 서비스, AR 재빌드라 digest가 다름). 아니면 이유 코드 `SCENARIO_NOT_MATCHED`.
 
 `scenarioRef`는 지금 늘 null이라 보지 않는다. 규칙은 **고정 시나리오 전용**이다(사본 경로·변환이 0ff0d44 Dockerfile에 맞춰져 있음). 이 점을 `reason`과 README에 적는다.
 
@@ -73,7 +74,9 @@
 | `DOCKER_BUILD` | docker를 쓸 수 있을 때만(`docker version` 이 10초 안에 성공) | 패치된 Dockerfile의 `base` `FROM` 줄 + 패치된 마지막 단계 첫 `RUN` 명령만으로 탐침 Dockerfile을 만들어 `docker build --network none -t echo-rule-patch-probe:<runId 앞 8자> -`(표준 입력, 빌드 문맥 없음) → `docker run --rm --network none <이미지> python -c "<pip 모듈이 없으면 0으로 끝남>"` → 끝나면 `docker rmi -f`. 셸을 거치지 않고 인자 목록으로 부른다. `summary`에 "실행 단계 RUN만, 앱 소스 없음" | 빌드 성공 + pip 없음 |
 | `TRIVY` | `trivy`가 PATH에 있고 `DOCKER_BUILD`가 PASS일 때만 | `trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --format json --quiet <탐침>` | 수정 가능한 HIGH·CRITICAL 0 |
 
-- docker 검사 전체 시간 상한 180초(넘으면 FAIL). 실행 마감까지 남은 시간이 `DEADLINE_MARGIN + 180초`보다 적으면 docker 검사를 건너뛴다(정적 검사만으로 결정, `reason`에 적음).
+- docker 검사 전체 시간 상한 180초(넘으면 미실행 — 패치 탓이 아니므로 FAIL로 적지 않는다). 실행 마감까지 남은 시간이 `DEADLINE_MARGIN + 180초(예산) + 30초(탐침 정리) + 30초(여유)`보다 적으면 docker 검사를 건너뛴다(정적 검사만으로 결정, `reason`에 적음). 남은 시간이 0 이하면 패치 단계 자체를 건너뛴다(`rule patch skipped`, `DEADLINE_TOO_CLOSE`).
+- trivy 실행 실패·결과를 못 읽음·시간 초과는 `TRIVY` 미실행으로 `reason`에 적는다. FAIL은 수정 가능한 HIGH·CRITICAL이 있을 때뿐이고, `summary`에 탐침 범위(base FROM + 실행 단계 첫 RUN, 앱 의존성·소스 미포함)를 적는다.
+- `POLICY`와 `touchesProtectedFiles`는 `files`와 diff `---`/`+++` 머리 경로의 합집합으로 계산한다. `touchesProtectedFiles`는 보호 파일에 닿을 때만 true.
 - 각 check에 `toolVersion`을 알 수 있으면 넣는다(`docker version` 서버 버전, `trivy --version`).
 - 결과는 검사 이름·결과·요약만 남긴다. 명령 출력 원문은 결과에 넣지 않는다(이벤트 `data`도 짧게).
 
@@ -82,15 +85,16 @@
 - **패치 단계의 어떤 실패도 실행을 FAILED로 만들지 않는다.** 규칙 findings·configDiff는 그대로 `SUCCEEDED`로 낸다.
 - 검사 하나라도 PASS가 아니면: **패치를 내지 않는다**(`patches: []`), 이벤트 `PATCH_VERIFY` WARN `"rule patch dropped after failed check"`(data: `checks` 이름=결과 목록).
 - 패치 단계 안 예외(파일 없음·docker 호출 오류 등): 패치를 내지 않고 이벤트 WARN `"rule patch skipped"`(data: `reason` 코드 — `SCENARIO_MISSING`·`TRANSFORM_NOT_APPLICABLE`·`PATCH_ERROR`).
-- 발동 조건이 거짓: 패치 없음, 이벤트 `PATCH_PROPOSE` INFO `"rule patch not applicable"`(data: `reason` = `C_IMG_1_NOT_FLAGGED` 또는 `ALREADY_PATCHED`).
-- `--no-patch`: 패치 단계를 아예 돌리지 않는다. 결과·이벤트가 지금 main(#15) 동작과 같다(PATCH_* 이벤트 0, `patches: []`). S1(`origin` 칸) 배포 전 WAS에 대고 돌릴 때 쓴다. `--no-model`과 함께 쓸 수 있다.
-- 성공: 이벤트 `PATCH_PROPOSE` INFO `"rule patch proposed"`(data: `patchId`, `origin: "RULE"`) → `PATCH_VERIFY` INFO `"rule patch checks passed"`(data: `checks`, `dockerChecked`, `trivyChecked`). 메시지는 고정 영어 200자 이하.
+- 발동 조건이 거짓: 패치 없음, 이벤트 `PATCH_PROPOSE` INFO `"rule patch not applicable"`(data: `reason` = `C_IMG_1_NOT_FLAGGED`·`SCENARIO_NOT_MATCHED`·`ALREADY_PATCHED`).
+- 패치가 꺼져 있으면(기본, `--no-patch`) 패치 단계를 아예 돌리지 않는다. 결과·이벤트가 지금 main(#15) 동작과 같다(PATCH_* 이벤트 0, `patches: []`). `--no-model`과 함께 쓸 수 있다.
+- 성공: 이벤트 `PATCH_PROPOSE` INFO `"rule patch drafted; checks pending"`(data: `patchId`, `origin: "RULE"`, 아직 결과에 싣지 않음) → `PATCH_VERIFY` INFO `"rule patch checks passed"`(data: `checks`, `dockerChecked`, `trivyChecked`). 메시지는 고정 영어 200자 이하.
+- (리뷰 반영) WAS가 패치가 실린 결과를 422 `RESULT_INVALID`로 거절하면 `PATCH_VERIFY` WARN `"result rejected; resent without rule patch"`(data: `code`, `droppedPatches`)를 남기고 `patches=[]`로 **한 번만** 다시 낸다. 다른 오류·패치 없는 결과의 422·다시 낸 결과의 거절은 그대로 실패다.
 - 실행 종류가 PRECHECK가 아니거나 분석이 실패한 경우(기존 FAILED 경로)·하트비트가 실행을 잃은 경우에는 패치 단계를 돌리지 않는다. 패치 단계 뒤 마감 검사에 걸려 FAILED·DEADLINE이 되면 패치도 버린다(`patches: []`).
 - 모델 검토 결과와 패치는 서로 독립이다(모델이 실패해도 규칙 패치는 낸다).
 
 ## 8. 명령줄·설정
 
-- `--no-patch`: 규칙 패치를 끈다(기본은 켜짐).
+- 규칙 패치는 **기본 끔**(손 실행 `--once` 포함, 리뷰 반영). `--patch`로 켜고 `--no-patch`는 끔을 분명히 한다(둘 다 주면 종료 코드 2). VM은 `ECHO_PRECHECK_PATCH=on|off`(기본 off) → 시작 스크립트가 `--patch`/`--no-patch`를 붙이며, 값 검사를 비밀 읽기 앞에서 한다.
 - 시나리오 루트: 기본은 저장소 루트(`precheck_patch.py` 기준 `parents[2]`)의 `scenarios/demo-app-0ff0d44/`. 환경 변수 `ECHO_SCENARIO_ROOT`로 바꿀 수 있다(시험용).
 - 새 의존성 없음(표준 라이브러리만: `difflib`·`hashlib`·`subprocess`·`shutil`).
 
@@ -112,6 +116,6 @@
 ## 11. 위험·남은 일
 
 - 운영 이미지가 6ac8813 뒤로 다시 검사돼 C-IMG-1이 PASS가 되면 시연 실행에서 규칙이 패치를 내지 않는다(설계대로). 시연 직전 입력의 C-IMG-1 값을 확인한다.
-- WAS S1(`origin` 칸) 배포 전에는 이 러너가 패치를 내면 결과 전체가 422 → 그때까지 `--no-patch`.
+- WAS S1(`origin` 칸, echo-was #79) 배포 전에 패치를 켜면 첫 제출이 422 → 러너가 패치를 빼고 한 번 다시 내 실행은 남는다(패치는 잃음). 켜는 것은 #79 배포 뒤에만.
 - VM 러너는 docker 권한·Trivy가 없어 정적 검사 3개로만 PASS를 낸다. docker 검사를 VM에서 돌리려면 러너 사용자 docker 그룹 추가(인프라 변경, 별도 승인)와 베이스 이미지 미리 받기(AD-3)가 필요하다.
 - 패치 반영(`APPLY_PATCH`, `applied/<runId>` 브랜치 커밋)은 S3.

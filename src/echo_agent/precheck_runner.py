@@ -8,7 +8,8 @@
   (→ WAS 가 `aiReviewed=true`)과 `origin: "AI"` WARN finding 이 붙는다(`precheck_model.py`).
 - 모델이 실패·거절하거나 마감이 가까우면 규칙 결과만으로 `SUCCEEDED`·`model=null`
   (SPEC `specs/ai-4-precheck-model-review.md` D-7·D-8·D-9). `--no-model` 이면 처음부터 규칙만.
-- 모델 검토 뒤 규칙 패치 제안 단계가 돈다(`precheck_patch.py`). `--no-patch` 이면 돌지 않는다.
+- 모델 검토 뒤 규칙 패치 제안 단계가 돈다(`precheck_patch.py`). 기본은 끔이고 `--patch` 로 켠다.
+  WAS 가 패치가 실린 결과를 422 `RESULT_INVALID` 로 거절하면 `patches=[]` 로 한 번 다시 낸다.
 - 마감(`deadlineAt`) 1분 전이 지나면 분석 결과 대신 `FAILED`·`DEADLINE` 을 낸다(계약 §7).
 - 스냅숏 모양이 v1 이 아니면 `FAILED`·`INPUT_INVALID`, 그 밖의 예외는 `FAILED`·`RUNNER_ERROR`.
 
@@ -62,6 +63,8 @@ FAILURE_DEADLINE = "DEADLINE"
 FAILURE_INPUT_INVALID = "INPUT_INVALID"
 FAILURE_KIND_UNSUPPORTED = "KIND_UNSUPPORTED"
 FAILURE_RUNNER_ERROR = "RUNNER_ERROR"
+
+RESULT_INVALID = "RESULT_INVALID"
 
 Clock = Callable[[], datetime]
 Logger = Callable[[str], None]
@@ -232,7 +235,7 @@ def process_run(
         result = build_result(
             analysis, status=status, failure_code=failure_code, review=review, patches=patches
         )
-        stored = client.submit_result(run, result)
+        stored = _submit_or_resend_without_patches(client, run, result, sender)
         return RunOutcome(
             run.id, stored or status, failure_code, submitted=True, review=review_status
         )
@@ -245,6 +248,31 @@ def process_run(
         return RunOutcome(run.id, "FAILED", FAILURE_RUNNER_ERROR, submitted=False)
     finally:
         heartbeat.stop()
+
+
+def _submit_or_resend_without_patches(
+    client: WasClient, run: ClaimedRun, result: Mapping[str, Any], sender: _EventSender
+) -> str | None:
+    """결과를 낸다. 패치가 실린 결과가 422 `RESULT_INVALID` 면 `patches=[]` 로 한 번만 다시 낸다.
+
+    WAS 가 패치 칸을 아직 모르거나(예: `origin`) 패치 하나가 검사에 걸려도 실행 하나를 통째로
+    잃지 않게 한다(C-AI-1 증거). 다시 낸 결과도 거절되면 그 오류를 그대로 올린다.
+    """
+    try:
+        return client.submit_result(run, result)
+    except WasError as error:
+        patches = result.get("patches") or []
+        if error.status != 422 or error.code != RESULT_INVALID or not patches:
+            raise
+        sender.events.add(
+            RunStep.PATCH_VERIFY,
+            "result rejected; resent without rule patch",
+            EventLevel.WARN,
+            code=RESULT_INVALID,
+            droppedPatches=len(patches),
+        )
+        sender.flush()
+        return client.submit_result(run, {**result, "patches": []})
 
 
 def _analyze_with_events(
@@ -408,10 +436,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="모델을 부르지 않고 규칙 비교만 한다(ANTHROPIC_API_KEY 불필요, 결과 model=null)",
     )
-    parser.add_argument(
+    patch_switch = parser.add_mutually_exclusive_group()
+    patch_switch.add_argument(
+        "--patch",
+        action="store_true",
+        help="규칙 패치를 켠다(기본은 끔. WAS 가 patches[].origin 을 받는 뒤에만, echo-was #79)",
+    )
+    patch_switch.add_argument(
         "--no-patch",
         action="store_true",
-        help="규칙 패치를 끈다(WAS 가 patches[].origin 을 받기 전, S1 배포 전에는 꼭 붙인다)",
+        help="규칙 패치를 끈다(기본값과 같다. 시작 스크립트가 끔을 분명히 하려고 붙인다)",
     )
     parser.add_argument(
         "--runner-name",
@@ -432,7 +466,7 @@ def main(argv: list[str] | None = None) -> int:
             _stderr(f"config error: {error} (규칙만 돌리려면 --no-model)")
             return 2
     _stderr(f"model review: {reviewer.model + ' ' + reviewer.effort if reviewer else 'off'}")
-    patcher = None if args.no_patch else RulePatcher()
+    patcher = RulePatcher() if args.patch else None
     _stderr(f"rule patch: {'on' if patcher else 'off'}")
 
     stop = threading.Event()

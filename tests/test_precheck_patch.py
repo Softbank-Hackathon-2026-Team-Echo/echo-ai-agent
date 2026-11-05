@@ -18,18 +18,24 @@ from typing import Any
 import pytest
 
 from echo_agent import precheck_patch, precheck_runner
+from echo_agent.events import RunEventLog
 from echo_agent.precheck_model import PrecheckReviewer
 from echo_agent.precheck_patch import (
     PATCH_ID,
     PIP_ABSENT_CODE,
     POLICY_VERSION,
     SCENARIO_FILE,
+    SCENARIO_IMAGE_DIGESTS,
     SCENARIO_ROOT_ENV,
+    TOOL_STAGE_SECONDS,
+    TRIVY_SCOPE_NOTE,
     CommandResult,
     DiffApplyError,
     RulePatcher,
+    already_patched,
     apply_unified_diff,
     build_diff,
+    diff_paths,
     fixable_vulnerabilities,
     patch_hash,
     policy_violations,
@@ -37,10 +43,19 @@ from echo_agent.precheck_patch import (
     probe_image,
     static_problems,
     subprocess_runner,
+    touched_paths,
     transform_dockerfile,
 )
 from echo_agent.precheck_rules import analyze
-from echo_agent.precheck_runner import FAILURE_DEADLINE, build_result, main, process_run, run_loop
+from echo_agent.precheck_runner import (
+    FAILURE_DEADLINE,
+    FAILURE_RUNNER_ERROR,
+    build_result,
+    main,
+    process_run,
+    run_loop,
+)
+from echo_agent.was_client import ClaimedRun
 from tests.test_precheck_model import FakeCreate, _response
 from tests.test_was_client import (
     BASE,
@@ -71,6 +86,9 @@ BASE_STEPS = ["INPUT_LOAD", "CONFIG_DIFF", "ANALYZE"]
 DOCKER_VERSION = ["docker", "version", "--format", "{{.Server.Version}}"]
 PROBE_TAG = f"echo-rule-patch-probe:{RUN_ID[:8]}"
 COMMAND_OUTPUT_CANARY = "raw-build-output-canary"
+SCENARIO_DIGEST = next(iter(SCENARIO_IMAGE_DIGESTS))
+OTHER_DIGEST = "sha256:" + "c" * 64
+DRAFTED = "rule patch drafted; checks pending"
 
 PLAIN_STAGES = """FROM python:3.13-slim AS base
 ENV A=1
@@ -152,8 +170,17 @@ def _static_only() -> RulePatcher:
     return RulePatcher(FakeCommands(docker=False), which=_no_tool)
 
 
-def _payload(*results: str, deadline: datetime | None = None) -> dict[str, Any]:
+def _payload(
+    *results: str,
+    deadline: datetime | None = None,
+    source_digest: str | None = SCENARIO_DIGEST,
+    service_name: str = "shop",
+) -> dict[str, Any]:
+    """기본은 출발 이미지가 시나리오 사본 이미지(echo-demo-app `0ff0d44`)인 점검."""
     payload = _run_payload(deadline)
+    snapshot = payload["run"]["inputSnapshot"]
+    snapshot["source"]["imageDigest"] = source_digest
+    snapshot["service"]["name"] = service_name
     payload["run"]["inputSnapshot"]["findings"] = [
         {
             "controlId": "C-IMG-1",
@@ -257,7 +284,7 @@ def test_rule_patch_proposed_for_flagged_c_img_1() -> None:
     assert [event["step"] for event in events] == [*BASE_STEPS, "PATCH_PROPOSE", "PATCH_VERIFY"]
     assert [event["seq"] for event in events] == list(range(1, 6))
     proposed, verified = events[-2:]
-    assert (proposed["level"], proposed["message"]) == ("INFO", "rule patch proposed")
+    assert (proposed["level"], proposed["message"]) == ("INFO", DRAFTED)
     assert proposed["data"] == {"patchId": PATCH_ID, "origin": "RULE"}
     assert (verified["level"], verified["message"]) == ("INFO", "rule patch checks passed")
     assert verified["data"] == {
@@ -362,7 +389,8 @@ def test_no_patch_flag_keeps_pr14_result() -> None:
     assert {**patched, "patches": []} == plain  # 패치 말고 나머지 결과는 같다
 
 
-def test_main_turns_the_patcher_on_unless_no_patch(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_keeps_the_patcher_off_unless_patch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """손 실행(`--once`)도 기본은 끔이다. 켜려면 `--patch`."""
     captured: list[Any] = []
 
     def fake_loop(client: Any, name: str, **kwargs: Any) -> int:
@@ -375,9 +403,14 @@ def test_main_turns_the_patcher_on_unless_no_patch(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("ECHO_RUNNER_TOKEN", RUNNER_CRED)
 
     assert main(["--once", "--no-model"]) == 0
+    assert captured[-1] is None
+    assert main(["--once", "--no-model", "--patch"]) == 0
     assert isinstance(captured[-1], RulePatcher)
     assert main(["--once", "--no-model", "--no-patch"]) == 0
     assert captured[-1] is None
+    with pytest.raises(SystemExit) as error:
+        main(["--once", "--no-model", "--patch", "--no-patch"])
+    assert error.value.code == 2
 
 
 def test_run_loop_passes_the_patcher_to_each_run() -> None:
@@ -601,7 +634,7 @@ def test_rule_patch_does_not_depend_on_model_review() -> None:
     messages = [event["message"] for event in events]
     assert messages[-3:] == [
         "model review failed; rule result only",
-        "rule patch proposed",
+        DRAFTED,
         "rule patch checks passed",
     ]
 
@@ -707,9 +740,18 @@ def test_docker_check_fails_when_time_budget_runs_out() -> None:
 
     commands = SlowBuild()
     result, events = _submit(RulePatcher(commands, which=_has_trivy), "WARN")
-    event = _assert_dropped(result, events, [*STATIC_LABELS, "DOCKER_BUILD=FAIL"])
-    assert "시간 상한 180초 초과" in event["data"]["detail"]
+    # 시간 상한은 패치 탓이 아니므로 FAIL 이 아니라 미실행이다.
+    patch = result["patches"][0]
+    assert [check["name"] for check in patch["checks"]] == [
+        "PATCH_APPLIES",
+        "POLICY",
+        "DOCKERFILE_STATIC",
+    ]
+    assert "DOCKER_BUILD(시간 상한 180초 초과)" in patch["reason"]
+    assert "TRIVY(DOCKER_BUILD 미실행)" in patch["reason"]
+    assert events[-1]["data"]["dockerChecked"] is False
     assert commands.argv[-1][:3] == ["docker", "rmi", "-f"]
+    assert not any(args[0] == "trivy" for args in commands.argv)
 
 
 def test_failed_probe_cleanup_is_reported_but_does_not_change_verdict() -> None:
@@ -733,6 +775,7 @@ def test_trivy_check_runs_before_probe_is_removed() -> None:
     check = patch["checks"][-1]
     assert (check["name"], check["result"]) == ("TRIVY", "PASS")
     assert check["toolVersion"] == "trivy 0.75.0"
+    assert check["summary"] == f"수정 가능한 HIGH·CRITICAL 0건 ({TRIVY_SCOPE_NOTE})"
     assert commands.argv[-2:] == [
         [
             "trivy", "image", "--scanners", "vuln", "--severity", "HIGH,CRITICAL",
@@ -744,24 +787,32 @@ def test_trivy_check_runs_before_probe_is_removed() -> None:
     assert events[-1]["data"]["trivyChecked"] is True
 
 
+def test_trivy_fixable_vulnerability_drops_patch() -> None:
+    report = {"Results": [{"Vulnerabilities": [{"Severity": "HIGH", "FixedVersion": "1.2.3"}]}]}
+    commands = FakeCommands(trivy_json=json.dumps(report))
+    result, events = _submit(RulePatcher(commands, which=_has_trivy), "WARN")
+    event = _assert_dropped(result, events, [*STATIC_LABELS, "DOCKER_BUILD=PASS", "TRIVY=FAIL"])
+    assert TRIVY_SCOPE_NOTE in event["data"]["detail"]
+    assert commands.argv[-1][:3] == ["docker", "rmi", "-f"]
+
+
 @pytest.mark.parametrize(
-    "commands",
+    ("commands", "why"),
     [
-        FakeCommands(
-            trivy_json=json.dumps(
-                {"Results": [{"Vulnerabilities": [{"Severity": "HIGH", "FixedVersion": "1.2.3"}]}]}
-            )
-        ),
-        FakeCommands(trivy_rc=1),
-        FakeCommands(trivy_json="not json"),
-        FakeCommands(trivy_json='{"Results": ["bad"]}'),
+        (FakeCommands(trivy_rc=1), "trivy 실행 실패"),
+        (FakeCommands(trivy_json="not json"), "trivy 결과를 읽지 못함"),
+        (FakeCommands(trivy_json='{"Results": ["bad"]}'), "trivy 결과를 읽지 못함"),
     ],
-    ids=["fixable-high", "tool-error", "bad-json", "bad-shape"],
+    ids=["tool-error", "bad-json", "bad-shape"],
 )
-def test_trivy_failure_drops_patch(commands: FakeCommands) -> None:
+def test_trivy_tool_failure_is_not_run_instead_of_fail(commands: FakeCommands, why: str) -> None:
+    """trivy 준비·실행 실패(DB 내려받기 실패 등)는 패치 탓이 아니므로 미실행으로 적는다."""
     commands.calls = []
     result, events = _submit(RulePatcher(commands, which=_has_trivy), "WARN")
-    _assert_dropped(result, events, [*STATIC_LABELS, "DOCKER_BUILD=PASS", "TRIVY=FAIL"])
+    patch = result["patches"][0]
+    assert [check["name"] for check in patch["checks"]][-1] == "DOCKER_BUILD"
+    assert f"TRIVY({why})" in patch["reason"]
+    assert events[-1]["data"]["trivyChecked"] is False
     assert commands.argv[-1][:3] == ["docker", "rmi", "-f"]
 
 
@@ -967,3 +1018,204 @@ def test_events_stay_short_and_carry_no_command_output(build_rc: int) -> None:
         assert event["message"].isascii()
     sent = json.dumps([result, events], ensure_ascii=False)
     assert COMMAND_OUTPUT_CANARY not in sent
+
+
+# ---------------------------------------------------------------- 리뷰 반영(PR #18)
+# 1) WAS 422 거절 → patches=[] 로 한 번 다시 내기
+
+
+def _rejecting_patches(code: str = "RESULT_INVALID", *, always: bool = False) -> Any:
+    def result_route(path: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        if body["patches"] or always:
+            return fail(422, code)
+        return ok({"status": body["status"]})
+
+    return result_route
+
+
+def test_result_with_patch_rejected_422_is_resent_without_patches() -> None:
+    fake = _was(_payload("WARN"), result=_rejecting_patches())
+    outcome = process_run(_client(fake), _claimed(fake), log=lambda m: None, patcher=_static_only())
+
+    first, second = fake.bodies("result")
+    assert len(first["patches"]) == 1
+    assert second == {**first, "patches": []}  # 패치 말고는 같은 결과
+    assert (outcome.status, outcome.submitted) == ("SUCCEEDED", True)
+    events = _sent_events(fake)
+    resent = events[-1]
+    assert (resent["step"], resent["level"]) == ("PATCH_VERIFY", "WARN")
+    assert resent["message"] == "result rejected; resent without rule patch"
+    assert resent["data"] == {"code": "RESULT_INVALID", "droppedPatches": 1}
+    # 경고 이벤트가 다시 낸 결과보다 먼저 나간다.
+    paths = [path.rsplit("/", 1)[-1] for path, _, _ in fake.calls]
+    assert paths[-3:] == ["result", "events", "result"]
+
+
+def test_result_rejected_422_without_patches_is_not_resent() -> None:
+    fake = _was(_payload("PASS"), result=_rejecting_patches(always=True))
+    outcome = process_run(_client(fake), _claimed(fake), log=lambda m: None, patcher=_static_only())
+    assert len(fake.bodies("result")) == 1
+    assert (outcome.status, outcome.failure_code) == ("FAILED", FAILURE_RUNNER_ERROR)
+
+
+def test_result_rejected_again_after_resend_stops_after_one_retry() -> None:
+    fake = _was(_payload("WARN"), result=_rejecting_patches(always=True))
+    outcome = process_run(_client(fake), _claimed(fake), log=lambda m: None, patcher=_static_only())
+    assert [len(body["patches"]) for body in fake.bodies("result")] == [1, 0]
+    assert (outcome.status, outcome.submitted) == ("FAILED", False)
+
+
+def test_other_result_errors_with_patch_are_not_resent() -> None:
+    fake = _was(_payload("WARN"), result=_rejecting_patches("VALIDATION_ERROR"))
+    outcome = process_run(_client(fake), _claimed(fake), log=lambda m: None, patcher=_static_only())
+    assert len(fake.bodies("result")) == 1
+    assert outcome.submitted is False
+
+
+# 2) 마감 기준: 예산 180 + 정리 30 + 여유, 남은 시간 0 이하면 패치 단계 건너뛰기
+
+
+def test_tool_stage_needs_budget_cleanup_and_margin() -> None:
+    assert TOOL_STAGE_SECONDS == 180.0 + 30.0 + 30.0
+
+
+@pytest.mark.parametrize(
+    ("seconds_left", "docker_runs"),
+    [(200.0, False), (TOOL_STAGE_SECONDS - 1, False), (TOOL_STAGE_SECONDS, True)],
+    ids=["200s-reviewer-case", "just-below", "enough"],
+)
+def test_docker_check_needs_room_for_cleanup(seconds_left: float, docker_runs: bool) -> None:
+    commands = FakeCommands()
+    fake = _was(_payload("WARN"))
+    run = _claimed(fake)
+    events = RunEventLog(run.id)
+    patches = RulePatcher(commands, which=_no_tool).propose(
+        run, events, timedelta(seconds=seconds_left), lambda: None
+    )
+    assert len(patches) == 1
+    assert bool(commands.calls) is docker_runs
+    if not docker_runs:
+        assert "DOCKER_BUILD(실행 마감이 가까워 건너뜀)" in patches[0]["reason"]
+
+
+@pytest.mark.parametrize("seconds_left", [0.0, -5.0])
+def test_patch_stage_skipped_when_no_time_left(seconds_left: float) -> None:
+    commands = FakeCommands()
+    fake = _was(_payload("WARN"))
+    run: ClaimedRun = _claimed(fake)
+    events = RunEventLog(run.id)
+    flushed: list[int] = []
+    patches = RulePatcher(commands, which=_has_trivy).propose(
+        run, events, timedelta(seconds=seconds_left), lambda: flushed.append(1)
+    )
+    assert patches == []
+    assert commands.calls == [] and flushed == []
+    [event] = [event.to_json() for event in events.events]
+    assert (event["step"], event["level"], event["message"]) == (
+        "PATCH_PROPOSE",
+        "WARN",
+        "rule patch skipped",
+    )
+    assert event["data"] == {"reason": "DEADLINE_TOO_CLOSE"}
+
+
+# 3) 발동 조건: 사본 이미지 digest 또는 시연 서비스 이름
+
+
+def test_rule_patch_not_applicable_for_other_service_and_image() -> None:
+    commands = FakeCommands()
+    fake = _was(_payload("WARN", source_digest=OTHER_DIGEST, service_name="shop"))
+    process_run(
+        _client(fake),
+        _claimed(fake),
+        log=lambda m: None,
+        patcher=RulePatcher(commands, which=_has_trivy),
+    )
+    result = fake.bodies("result")[0]
+    assert result["patches"] == []
+    assert result["status"] == "SUCCEEDED"
+    [event] = _patch_events(_sent_events(fake))
+    assert (event["step"], event["level"]) == ("PATCH_PROPOSE", "INFO")
+    assert event["message"] == "rule patch not applicable"
+    assert event["data"] == {"reason": "SCENARIO_NOT_MATCHED"}
+    assert commands.calls == []
+
+
+def test_rule_patch_applies_when_target_digest_is_the_scenario_image() -> None:
+    payload = _payload("WARN", source_digest=OTHER_DIGEST)
+    payload["run"]["inputSnapshot"]["target"]["imageDigest"] = SCENARIO_DIGEST
+    fake = _was(payload)
+    process_run(_client(fake), _claimed(fake), log=lambda m: None, patcher=_static_only())
+    assert len(fake.bodies("result")[0]["patches"]) == 1
+
+
+def test_rule_patch_applies_for_demo_service_name_with_rebuilt_image() -> None:
+    """WAS 시연 서비스 `demo` 는 AR 에서 다시 빌드해 digest 가 다르다."""
+    fake = _was(_payload("WARN", source_digest=OTHER_DIGEST, service_name="demo"))
+    process_run(_client(fake), _claimed(fake), log=lambda m: None, patcher=_static_only())
+    assert len(fake.bodies("result")[0]["patches"]) == 1
+
+
+def test_scenario_digest_is_the_0ff0d44_image_deployed_by_echo_infra() -> None:
+    targets = json.loads((REPO / "security/scan-targets.json").read_text())
+    [demo] = [image for image in targets["images"] if image["name"] == "echo-demo-app"]
+    assert demo["ref"].split("@", 1)[1] in SCENARIO_IMAGE_DIGESTS
+
+
+# 가능하면: already_patched 는 pip 자신을 지울 때만
+
+
+@pytest.mark.parametrize(
+    ("run", "patched"),
+    [
+        ("RUN pip uninstall -y requests", False),
+        ("RUN python -m pip uninstall --yes setuptools wheel", False),
+        ("RUN pip uninstall -y requests && echo pip", False),
+        ("RUN pip uninstall -y pip", True),
+        ("RUN pip3 uninstall --yes pip3", True),
+        ("RUN pip uninstall -y requests && python -m pip uninstall --yes pip", True),
+    ],
+)
+def test_already_patched_only_when_pip_itself_is_removed(run: str, patched: bool) -> None:
+    text = PLAIN_STAGES.replace("USER 1001:1001", f"{run}\nUSER 1001:1001")
+    assert already_patched(text) is patched
+
+
+def test_uninstalling_another_package_still_gets_the_patch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    text = ORIGINAL.replace("USER 1001:1001", "RUN pip uninstall -y requests\nUSER 1001:1001")
+    assert text != ORIGINAL
+    _write_scenario(tmp_path, text, monkeypatch)
+    result, _ = _submit(_static_only(), "WARN")
+    assert len(result["patches"]) == 1
+
+
+# 가능하면: POLICY·touchesProtectedFiles 를 diff 경로와 files 로 계산
+
+
+def test_diff_paths_reads_both_headers() -> None:
+    diff = build_diff(ORIGINAL, FIXED, SCENARIO_FILE)
+    assert diff_paths(diff) == [SCENARIO_FILE]
+    odd = diff.replace(f"+++ b/{SCENARIO_FILE}", "+++ b/tests/conftest.py", 1)
+    assert diff_paths(odd) == [SCENARIO_FILE, "tests/conftest.py"]
+    assert touched_paths([SCENARIO_FILE], odd) == [SCENARIO_FILE, "tests/conftest.py"]
+    assert policy_violations(touched_paths([SCENARIO_FILE], odd)) == [
+        "OUTSIDE_SCENARIO",
+        "PROTECTED_FILE",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("path", "protected"),
+    [(SCENARIO_FILE, False), ("Dockerfile", False), ("specs/Dockerfile", True)],
+)
+def test_touches_protected_files_only_for_protected_paths(
+    path: str, protected: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(precheck_patch, "SCENARIO_FILE", path)
+    candidate = precheck_patch._Candidate(
+        ORIGINAL, FIXED, build_diff(ORIGINAL, FIXED, path), precheck_patch.Counter({"WARN": 1})
+    )
+    element = precheck_patch._patch_element(candidate, [], [])
+    assert element["touchesProtectedFiles"] is protected

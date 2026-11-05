@@ -20,4 +20,4 @@
 
 ## 규칙 R-PIP-1
 
-입력 스냅숏의 `findings[]`에 `controlId`가 `C-IMG-1`이고 결과가 PASS가 아닌 항목이 있고, 이 사본의 마지막 단계에 `pip uninstall`이 없으면 발동한다. 마지막 단계의 첫 `RUN` 앞에 pip를 지우는 명령과 주석 3줄을 넣는 패치 하나를 만들며, 그 결과는 `6ac8813`의 `Dockerfile`과 바이트가 같다. 모델을 쓰지 않으므로 `origin: "RULE"`로 표시한다. 변환이 이 Dockerfile에 맞춰져 있어 **이 고정 시나리오 전용**이고, 다른 앱에는 쓸 수 없다.
+입력 스냅숏의 `findings[]`에 `controlId`가 `C-IMG-1`이고 결과가 PASS가 아닌 항목이 있고, 점검 대상이 이 사본의 서비스(출발·도착 이미지 digest 중 하나가 `0ff0d44` GHCR 이미지 `sha256:3a8211ce…`이거나 서비스 이름 `demo`)이고, 이 사본의 마지막 단계에 pip 자신을 지우는 `pip uninstall … pip`이 없으면 발동한다. 마지막 단계의 첫 `RUN` 앞에 pip를 지우는 명령과 주석 3줄을 넣는 패치 하나를 만들며, 그 결과는 `6ac8813`의 `Dockerfile`과 바이트가 같다. 모델을 쓰지 않으므로 `origin: "RULE"`로 표시한다. 변환이 이 Dockerfile에 맞춰져 있어 **이 고정 시나리오 전용**이고, 다른 앱에는 쓸 수 없다.

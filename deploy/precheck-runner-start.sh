@@ -8,20 +8,15 @@ set -euo pipefail
 : "${ECHO_GCP_PROJECT:?missing ECHO_GCP_PROJECT}"
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-read_secret() {
-  gcloud secrets versions access latest --secret="$1" --project="$ECHO_GCP_PROJECT" --quiet
-}
-
-ECHO_RUNNER_TOKEN="$(read_secret echo-sandbox-was-runner-token)"
-export ECHO_RUNNER_TOKEN
-
+# 값 검사를 비밀 읽기보다 먼저 한다. 오타면 Secret Manager 를 부르기 전에 종료 코드 2 로 멈춘다
+# (서비스는 2 를 설정 오류로 보고 다시 띄우지 않는다).
 args=()
 case "${ECHO_PRECHECK_MODEL:-on}" in
   on)
-    ANTHROPIC_API_KEY="$(read_secret echo-sandbox-anthropic-api-key)"
-    export ANTHROPIC_API_KEY
+    use_model=1
     ;;
   off)
+    use_model=0
     args+=(--no-model)
     ;;
   *)
@@ -31,6 +26,7 @@ case "${ECHO_PRECHECK_MODEL:-on}" in
 esac
 case "${ECHO_PRECHECK_PATCH:-off}" in
   on)
+    args+=(--patch)
     ;;
   off)
     args+=(--no-patch)
@@ -40,5 +36,16 @@ case "${ECHO_PRECHECK_PATCH:-off}" in
     exit 2
     ;;
 esac
+
+read_secret() {
+  gcloud secrets versions access latest --secret="$1" --project="$ECHO_GCP_PROJECT" --quiet
+}
+
+ECHO_RUNNER_TOKEN="$(read_secret echo-sandbox-was-runner-token)"
+export ECHO_RUNNER_TOKEN
+if [ "$use_model" = 1 ]; then
+  ANTHROPIC_API_KEY="$(read_secret echo-sandbox-anthropic-api-key)"
+  export ANTHROPIC_API_KEY
+fi
 
 exec "$APP_DIR/.venv/bin/python" -m echo_agent.precheck_runner "${args[@]}"

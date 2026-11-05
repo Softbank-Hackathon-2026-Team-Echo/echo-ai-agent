@@ -2,14 +2,15 @@
 
 SPEC `specs/ai-5-rule-patch-proposal.md`. 모델을 쓰지 않으며 `origin: "RULE"` 로 표시한다.
 
-    발동 조건 확인 → Dockerfile 변환 → unified diff → PATCH_PROPOSE 이벤트
-    → 검사(PATCH_APPLIES · POLICY · DOCKERFILE_STATIC · DOCKER_BUILD · TRIVY) → PATCH_VERIFY 이벤트
+    발동 조건 확인(C-IMG-1 + 시나리오 이미지·서비스) → Dockerfile 변환 → unified diff
+    → PATCH_PROPOSE 이벤트("drafted") → 검사(PATCH_APPLIES · POLICY · DOCKERFILE_STATIC
+    · DOCKER_BUILD · TRIVY) → PATCH_VERIFY 이벤트
 
 - 고정 시나리오 전용 규칙이다. 대상은 운영 저장소가 아니라 이 저장소의 사본
   `scenarios/demo-app-0ff0d44/Dockerfile` 이고, 변환 결과는 운영에서 사람이 낸 수정
   echo-demo-app `6ac8813` 과 바이트가 같다.
-- 검사는 실제로 돌린 것만 `checks` 에 적는다. docker·trivy 를 못 쓰면 그 검사를 넣지 않고
-  `reason` 에 미실행과 이유를 적는다.
+- 검사는 실제로 돌린 것만 `checks` 에 적는다. docker·trivy 를 못 쓰거나 도구 준비가 실패하면
+  (시간 초과·trivy 실행 실패·결과를 못 읽음) 그 검사를 넣지 않고 `reason` 에 미실행과 이유를 적는다.
 - 패치 단계의 어떤 실패도 실행을 FAILED 로 만들지 않는다. 패치 없이 규칙 결과만 낸다.
 """
 
@@ -38,6 +39,14 @@ SCENARIO_FILE = f"{SCENARIO_DIR}/Dockerfile"
 
 PATCH_ID = "rule-c-img-1-pip-uninstall"
 TRIGGER_CONTROL = "C-IMG-1"
+# 발동 조건 3: 사본과 같은 이미지·서비스의 점검일 때만. 출발·도착 중 한쪽 digest 가 목록에 있거나
+# 서비스 이름이 목록에 있어야 한다. digest 는 echo-demo-app `0ff0d44` 로 GHCR 에 게시한 이미지
+# (`sha-0ff0d44…` 태그, echo-infra `demo-app/base/kustomization.yaml`·`onprem/install.sh` 의 값).
+SCENARIO_IMAGE_DIGESTS = frozenset(
+    {"sha256:3a8211ce82191fdee4da70d736f4946bf8be84c052bf889f7f5c2e6b596405bd"}
+)
+# WAS 의 시연 서비스 이름(실제 실행기 이미지는 AR 에서 다시 빌드해 digest 가 다르다).
+SCENARIO_SERVICE_NAMES = frozenset({"demo"})
 POLICY_VERSION = "rule-patch-policy-2026.11.05"
 
 CHECK_PATCH_APPLIES = "PATCH_APPLIES"
@@ -50,6 +59,8 @@ RESULT_FAIL = "FAIL"
 
 # 이유 코드(이벤트 data.reason).
 REASON_NOT_FLAGGED = "C_IMG_1_NOT_FLAGGED"
+REASON_OTHER_SERVICE = "SCENARIO_NOT_MATCHED"
+REASON_DEADLINE = "DEADLINE_TOO_CLOSE"
 REASON_ALREADY_PATCHED = "ALREADY_PATCHED"
 REASON_SCENARIO_MISSING = "SCENARIO_MISSING"
 REASON_NOT_APPLICABLE = "TRANSFORM_NOT_APPLICABLE"
@@ -58,11 +69,15 @@ REASON_PATCH_ERROR = "PATCH_ERROR"
 DOCKER_PROBE_SECONDS = 10.0
 DOCKER_BUDGET_SECONDS = 180.0
 CLEANUP_SECONDS = 30.0
+TOOL_MARGIN_SECONDS = 30.0
+# docker·trivy 검사를 시작하려면 남아 있어야 하는 시간: 예산 + 탐침 이미지 정리 + 여유.
+TOOL_STAGE_SECONDS = DOCKER_BUDGET_SECONDS + CLEANUP_SECONDS + TOOL_MARGIN_SECONDS
 TOOL_VERSION_LIMIT = 64
 FLAGGED_TEXT_LIMIT = 200
 
 PROBE_IMAGE_PREFIX = "echo-rule-patch-probe"
 PROBE_NOTE = "실행 단계 RUN만, 앱 소스 없음"
+TRIVY_SCOPE_NOTE = "탐침 범위: base FROM + 실행 단계 첫 RUN, 앱 의존성·소스 미포함"
 # pip 모듈이 없으면 0 으로 끝난다.
 PIP_ABSENT_CODE = (
     "import importlib.util, sys; sys.exit(1 if importlib.util.find_spec('pip') else 0)"
@@ -76,6 +91,8 @@ _PIP_COMMENT_LINES = (
 )
 _PIP_UNINSTALL_LINE = "RUN python -m pip uninstall --yes --no-cache-dir pip && \\\n"
 _PIP_UNINSTALL = re.compile(r"\bpip3?\s+uninstall\b")
+_SHELL_SEPARATOR = re.compile(r"&&|\|\||;|\|")
+_PIP_PACKAGE_NAMES = frozenset({"pip", "pip3"})
 _RUNTIME_USER = "1001:1001"
 
 _PROTECTED_DIRS = frozenset({"tests", ".github", "security", "specs"})
@@ -183,7 +200,16 @@ def _stages(text: str) -> list[list[_Instruction]]:
 
 
 def _is_pip_uninstall(instruction: _Instruction) -> bool:
-    return instruction.keyword == "RUN" and _PIP_UNINSTALL.search(instruction.args) is not None
+    """`RUN` 이 pip 자신을 지운다(`pip uninstall … pip`). 다른 패키지만 지우면 아니다."""
+    if instruction.keyword != "RUN":
+        return False
+    for match in _PIP_UNINSTALL.finditer(instruction.args):
+        rest = instruction.args[match.end() :]
+        command = _SHELL_SEPARATOR.split(rest, maxsplit=1)[0]
+        packages = {word for word in command.split() if not word.startswith("-")}
+        if packages & _PIP_PACKAGE_NAMES:
+            return True
+    return False
 
 
 def _signature(stage: Sequence[_Instruction]) -> list[tuple[str, str]]:
@@ -211,8 +237,19 @@ def flagged_results(raw_snapshot: Mapping[str, Any]) -> Counter[str]:
     )
 
 
+def scenario_matches(raw_snapshot: Mapping[str, Any]) -> bool:
+    """발동 조건 3: 출발·도착 digest 중 하나가 사본 이미지이거나, 서비스 이름이 시연 서비스다."""
+    snapshot = parse_snapshot(raw_snapshot)
+    digests = {snapshot.source.image_digest, snapshot.target.image_digest}
+    if digests & SCENARIO_IMAGE_DIGESTS:
+        return True
+    service = raw_snapshot.get("service")
+    name = service.get("name") if isinstance(service, Mapping) else None
+    return isinstance(name, str) and name in SCENARIO_SERVICE_NAMES
+
+
 def already_patched(source: str) -> bool:
-    """발동 조건 2 의 반대: 마지막 단계에 이미 `pip uninstall` 이 있다."""
+    """발동 조건 2 의 반대: 마지막 단계에 이미 pip 자신을 지우는 `pip uninstall … pip` 이 있다."""
     stages = _stages(source)
     return bool(stages) and any(_is_pip_uninstall(i) for i in stages[-1])
 
@@ -351,6 +388,24 @@ def policy_violations(files: Sequence[str]) -> list[str]:
     return sorted(violations)
 
 
+def diff_paths(diff: str) -> list[str]:
+    """diff 의 `--- a/…`·`+++ b/…` 머리 경로(`a/`·`b/` 를 뗀 값, 순서 유지·중복 없음)."""
+    paths: list[str] = []
+    for line in _split_lines(diff):
+        if line.startswith(("--- ", "+++ ")):
+            path = line[4:].rstrip("\n").split("\t", 1)[0]
+            if path != "/dev/null":
+                path = path.removeprefix("a/") if line[0] == "-" else path.removeprefix("b/")
+                if path not in paths:
+                    paths.append(path)
+    return paths
+
+
+def touched_paths(files: Sequence[str], diff: str) -> list[str]:
+    """POLICY 가 보는 경로: 패치의 `files` 와 diff 머리 경로의 합집합."""
+    return list(dict.fromkeys([*files, *diff_paths(diff)]))
+
+
 def static_problems(original: str, patched: str) -> list[str]:
     """DOCKERFILE_STATIC 위반 코드. 비었으면 통과."""
     before, after = _stages(original), _stages(patched)
@@ -394,7 +449,7 @@ def _check_applies(candidate: _Candidate) -> PatchCheck:
 
 
 def _check_policy(candidate: _Candidate) -> PatchCheck:
-    violations = policy_violations([SCENARIO_FILE])
+    violations = policy_violations(touched_paths([SCENARIO_FILE], candidate.diff))
     if violations:
         summary = "위반: " + ", ".join(violations)
         return PatchCheck(CHECK_POLICY, RESULT_FAIL, summary, policy_version=POLICY_VERSION)
@@ -487,11 +542,17 @@ class RulePatcher:
         """
         step = RunStep.PATCH_PROPOSE
         try:
+            if remaining.total_seconds() <= 0:
+                raise _PatchSkipped(REASON_DEADLINE)
             candidate = _prepare(run.input_snapshot, events)
             if candidate is None:
                 return []
+            # 아직 결과에 싣지 않았다. 검사를 모두 통과해야 "checks passed" 와 함께 실린다.
             events.add(
-                RunStep.PATCH_PROPOSE, "rule patch proposed", patchId=PATCH_ID, origin="RULE"
+                RunStep.PATCH_PROPOSE,
+                "rule patch drafted; checks pending",
+                patchId=PATCH_ID,
+                origin="RULE",
             )
             flush()
             step = RunStep.PATCH_VERIFY
@@ -534,7 +595,8 @@ class RulePatcher:
         return [_patch_element(candidate, checks, tools.not_run)]
 
     def _tool_checks(self, run_id: str, patched: str, seconds_left: float) -> _ToolChecks:
-        if seconds_left < DOCKER_BUDGET_SECONDS:
+        # 탐침 정리(최대 30초)는 예산 밖에서 따로 쓰므로 기준에 함께 넣는다.
+        if seconds_left < TOOL_STAGE_SECONDS:
             return _not_run_because("실행 마감이 가까워 건너뜀")
         budget_end = time.monotonic() + DOCKER_BUDGET_SECONDS
         docker_version = self._docker_version()
@@ -545,12 +607,19 @@ class RulePatcher:
         tools = _ToolChecks()
         try:
             build = self._docker_build_check(image, probe, docker_version, budget_end)
-            tools.checks.append(build)
-            if build.passed:
+            if isinstance(build, str):
+                tools.not_run.extend(_not_run_because(build).not_run)
+            else:
+                tools.checks.append(build)
+            if isinstance(build, PatchCheck) and build.passed:
                 if self.which("trivy") is None:
                     tools.not_run.append(f"{CHECK_TRIVY}(trivy 가 PATH 에 없음)")
                 else:
-                    tools.checks.append(self._trivy_check(image, budget_end))
+                    trivy = self._trivy_check(image, budget_end)
+                    if isinstance(trivy, str):
+                        tools.not_run.append(f"{CHECK_TRIVY}({trivy})")
+                    else:
+                        tools.checks.append(trivy)
         finally:
             tools.probe_removed = self._remove_probe(image)
         return tools
@@ -573,7 +642,9 @@ class RulePatcher:
 
     def _docker_build_check(
         self, image: str, probe: str, tool_version: str, budget_end: float
-    ) -> PatchCheck:
+    ) -> PatchCheck | str:
+        """판정, 또는 미실행 이유(시간 상한 초과는 패치 탓이 아니라 미실행으로 본다)."""
+
         def verdict(result: str, summary: str) -> PatchCheck:
             return PatchCheck(
                 CHECK_DOCKER_BUILD, result, f"{summary} ({PROBE_NOTE})", tool_version=tool_version
@@ -589,14 +660,17 @@ class RulePatcher:
             if self._timed(pip_command, None, budget_end).returncode != 0:
                 return verdict(RESULT_FAIL, "탐침 이미지에 pip 가 남아 있음")
         except subprocess.TimeoutExpired:
-            return verdict(RESULT_FAIL, f"시간 상한 {DOCKER_BUDGET_SECONDS:.0f}초 초과")
+            return f"시간 상한 {DOCKER_BUDGET_SECONDS:.0f}초 초과"
         return verdict(RESULT_PASS, "탐침 빌드 성공, pip 없음")
 
-    def _trivy_check(self, image: str, budget_end: float) -> PatchCheck:
+    def _trivy_check(self, image: str, budget_end: float) -> PatchCheck | str:
+        """판정, 또는 미실행 이유(trivy 준비·실행 실패는 패치 탓이 아니다)."""
         version = self._trivy_version(budget_end)
 
         def verdict(result: str, summary: str) -> PatchCheck:
-            return PatchCheck(CHECK_TRIVY, result, summary, tool_version=version)
+            return PatchCheck(
+                CHECK_TRIVY, result, f"{summary} ({TRIVY_SCOPE_NOTE})", tool_version=version
+            )
 
         scan_command = (
             "trivy", "image", "--scanners", "vuln", "--severity", "HIGH,CRITICAL",
@@ -605,13 +679,13 @@ class RulePatcher:
         try:
             scan = self._timed(scan_command, None, budget_end)
         except subprocess.TimeoutExpired:
-            return verdict(RESULT_FAIL, f"시간 상한 {DOCKER_BUDGET_SECONDS:.0f}초 초과")
+            return f"시간 상한 {DOCKER_BUDGET_SECONDS:.0f}초 초과"
         if scan.returncode != 0:
-            return verdict(RESULT_FAIL, "trivy 실행 실패")
+            return "trivy 실행 실패"
         try:
             fixable = fixable_vulnerabilities(scan.stdout)
         except (ValueError, AttributeError, TypeError):
-            return verdict(RESULT_FAIL, "trivy 결과를 읽지 못함")
+            return "trivy 결과를 읽지 못함"
         result = RESULT_FAIL if fixable else RESULT_PASS
         return verdict(result, f"수정 가능한 HIGH·CRITICAL {fixable}건")
 
@@ -644,6 +718,9 @@ def _prepare(raw_snapshot: Mapping[str, Any], events: RunEventLog) -> _Candidate
     flagged = flagged_results(raw_snapshot)
     if not flagged:
         _report_not_applicable(events, REASON_NOT_FLAGGED)
+        return None
+    if not scenario_matches(raw_snapshot):
+        _report_not_applicable(events, REASON_OTHER_SERVICE)
         return None
     try:
         # 줄 끝을 바꾸지 않으려고 바이트로 읽는다.
@@ -689,7 +766,8 @@ def _patch_element(
         "files": [SCENARIO_FILE],
         "diff": candidate.diff,
         "reason": _reason(candidate.flagged, checks, not_run),
-        "touchesProtectedFiles": bool(policy_violations([SCENARIO_FILE])),
+        "touchesProtectedFiles": "PROTECTED_FILE"
+        in policy_violations(touched_paths([SCENARIO_FILE], candidate.diff)),
         "checks": [check.to_json() for check in checks],
         "origin": "RULE",
     }
