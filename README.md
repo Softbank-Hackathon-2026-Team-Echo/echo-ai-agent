@@ -59,7 +59,10 @@ WAS 사전 점검 실행을 가져가 출발·도착 환경 설정 차이를 규
    uv run python -m echo_agent.precheck_runner --once   # 한 번 가져가 보고 끝(실행이 없으면 종료 코드 0)
    uv run python -m echo_agent.precheck_runner          # 계속: 실행이 없으면 5초 뒤 다시, SIGTERM 으로 멈춤
    uv run python -m echo_agent.precheck_runner --once --no-model   # 모델 없이 규칙만(과금 없음)
+   uv run python -m echo_agent.precheck_runner --once --no-patch   # 규칙 패치 끔. WAS 가 patches[].origin 을 받기 전(S1 배포 전)에는 꼭 붙인다(없으면 결과 전체 422)
    ```
+
+   규칙 패치의 대상과 규칙: [시나리오 사본 README](scenarios/demo-app-0ff0d44/README.md).
 
    흐름: `runs:claim` → 첫 하트비트(CLAIMED → RUNNING) → 30초마다 하트비트 → 이벤트 `INPUT_LOAD`·`CONFIG_DIFF`·`ANALYZE` → 모델 검토(`ANALYZE` 이벤트 "model review started/finished") → `result`. 마감 1분 전이 지나면 `FAILED`·`DEADLINE`, 스냅숏 모양이 v1이 아니면 `FAILED`·`INPUT_INVALID`, 그 밖의 예외는 `FAILED`·`RUNNER_ERROR`.
 

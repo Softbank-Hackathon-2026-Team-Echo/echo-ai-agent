@@ -8,6 +8,7 @@
   (→ WAS 가 `aiReviewed=true`)과 `origin: "AI"` WARN finding 이 붙는다(`precheck_model.py`).
 - 모델이 실패·거절하거나 마감이 가까우면 규칙 결과만으로 `SUCCEEDED`·`model=null`
   (SPEC `specs/ai-4-precheck-model-review.md` D-7·D-8·D-9). `--no-model` 이면 처음부터 규칙만.
+- 모델 검토 뒤 규칙 패치 제안 단계가 돈다(`precheck_patch.py`). `--no-patch` 이면 돌지 않는다.
 - 마감(`deadlineAt`) 1분 전이 지나면 분석 결과 대신 `FAILED`·`DEADLINE` 을 낸다(계약 §7).
 - 스냅숏 모양이 v1 이 아니면 `FAILED`·`INPUT_INVALID`, 그 밖의 예외는 `FAILED`·`RUNNER_ERROR`.
 
@@ -20,7 +21,7 @@ import os
 import signal
 import sys
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import FrameType
@@ -34,6 +35,7 @@ from echo_agent.precheck_model import (
     PrecheckReviewer,
     ReviewStatus,
 )
+from echo_agent.precheck_patch import RulePatcher
 from echo_agent.precheck_rules import (
     FINDINGS_LIMIT,
     PrecheckAnalysis,
@@ -96,6 +98,7 @@ def build_result(
     status: str,
     failure_code: str | None,
     review: ModelReview | None = None,
+    patches: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """`RunResult`(echo-was SPEC §5.3). WAS 는 모르는 칸을 422 로 거절하므로 칸을 더하지 않는다.
 
@@ -115,7 +118,7 @@ def build_result(
         "configDiff": [d.to_json() for d in analysis.config_diff] if analysis else [],
         "featureGaps": [],
         "findings": findings[:FINDINGS_LIMIT],
-        "patches": [],
+        "patches": [dict(p) for p in patches] if analysis else [],
         "blockedAttempts": [],
     }
 
@@ -193,10 +196,12 @@ def process_run(
     heartbeat_interval: float = HEARTBEAT_INTERVAL_SECONDS,
     log: Logger = _stderr,
     reviewer: PrecheckReviewer | None = None,
+    patcher: RulePatcher | None = None,
 ) -> RunOutcome:
     """가져간 실행 하나를 끝까지 처리한다. 예외를 밖으로 내지 않는다.
 
     `reviewer` 가 없으면 규칙 비교만 한다(`--no-model`, PR #14 동작).
+    `patcher` 가 없으면 패치 단계를 돌리지 않는다(`--no-patch`).
     """
     heartbeat = Heartbeat(client, run, interval=heartbeat_interval, log=log)
     sender = _EventSender(client, run, log)
@@ -211,6 +216,12 @@ def process_run(
         if analysis is not None and reviewer is not None and not heartbeat.lost.is_set():
             # 모델 호출이 길어도 하트비트 스레드가 임대를 늘린다.
             review = _review_with_events(run, analysis, reviewer, sender, clock)
+        patches: list[dict[str, Any]] = []
+        if analysis is not None and patcher is not None and not heartbeat.lost.is_set():
+            # docker 검사가 길어도 하트비트 스레드가 임대를 늘린다.
+            cutoff = run.deadline_at - DEADLINE_MARGIN
+            patches = patcher.propose(run, sender.events, cutoff - clock(), sender.flush)
+            sender.flush()
         review_status = review.status.value if review else None
         if heartbeat.lost.is_set():
             return RunOutcome(run.id, "LOST", None, submitted=False, review=review_status)
@@ -218,9 +229,10 @@ def process_run(
             sender.events.add(RunStep.ANALYZE, "deadline reached before result", EventLevel.ERROR)
             analysis, status, failure_code, review = None, "FAILED", FAILURE_DEADLINE, None
         sender.flush()
-        stored = client.submit_result(
-            run, build_result(analysis, status=status, failure_code=failure_code, review=review)
+        result = build_result(
+            analysis, status=status, failure_code=failure_code, review=review, patches=patches
         )
+        stored = client.submit_result(run, result)
         return RunOutcome(
             run.id, stored or status, failure_code, submitted=True, review=review_status
         )
@@ -354,6 +366,7 @@ def run_loop(
     idle_seconds: float = IDLE_SECONDS,
     log: Logger = _stderr,
     reviewer: PrecheckReviewer | None = None,
+    patcher: RulePatcher | None = None,
 ) -> int:
     """가져갈 실행이 생길 때마다 처리한다. `--once` 면 한 번 가져가 보고 끝낸다."""
     while not stop.is_set():
@@ -372,7 +385,7 @@ def run_loop(
             stop.wait(idle_seconds)
             continue
         log(f"claimed run={run.id} kind={run.kind} deadline={run.deadline_at.isoformat()}")
-        outcome = process_run(client, run, log=log, reviewer=reviewer)
+        outcome = process_run(client, run, log=log, reviewer=reviewer, patcher=patcher)
         log(
             f"finished run={outcome.run_id} status={outcome.status} "
             f"failure={outcome.failure_code} submitted={outcome.submitted} "
@@ -396,6 +409,11 @@ def main(argv: list[str] | None = None) -> int:
         help="모델을 부르지 않고 규칙 비교만 한다(ANTHROPIC_API_KEY 불필요, 결과 model=null)",
     )
     parser.add_argument(
+        "--no-patch",
+        action="store_true",
+        help="규칙 패치를 끈다(WAS 가 patches[].origin 을 받기 전, S1 배포 전에는 꼭 붙인다)",
+    )
+    parser.add_argument(
         "--runner-name",
         default=os.environ.get("ECHO_RUNNER_NAME", DEFAULT_RUNNER_NAME),
         help="러너 토큰을 발급할 때 쓴 이름(WAS 가 토큰 이름과 대조)",
@@ -414,6 +432,8 @@ def main(argv: list[str] | None = None) -> int:
             _stderr(f"config error: {error} (규칙만 돌리려면 --no-model)")
             return 2
     _stderr(f"model review: {reviewer.model + ' ' + reviewer.effort if reviewer else 'off'}")
+    patcher = None if args.no_patch else RulePatcher()
+    _stderr(f"rule patch: {'on' if patcher else 'off'}")
 
     stop = threading.Event()
 
@@ -422,7 +442,9 @@ def main(argv: list[str] | None = None) -> int:
 
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
-    return run_loop(client, args.runner_name, once=args.once, stop=stop, reviewer=reviewer)
+    return run_loop(
+        client, args.runner_name, once=args.once, stop=stop, reviewer=reviewer, patcher=patcher
+    )
 
 
 if __name__ == "__main__":
