@@ -5,7 +5,7 @@
 - Depth: Standard (러너 모듈 1개 추가, WAS·인프라 변경 없음)
 - GitHub 이슈: https://github.com/Softbank-Hackathon-2026-Team-Echo/echo-ai-agent/issues/4 (AI 에이전트 4) — 모델 검토 부분
 - 근거: AI 에이전트 1 SPEC D-2·D-3·D-5·D-7·AD-7 / 부록 A §3.3 / echo-was `docs/agent-runner.md`·`app/schemas/runner.py`(`origin/main` `65b71d3`) / PR #14 러프 러너
-- 저장소: `echo-ai-agent` · 브랜치 `feat/ai-4-model-review` (PR #14 `6e461ac` 위에 쌓임) · PR로 올린다
+- 저장소: `echo-ai-agent` · 브랜치 `feat/ai-4-model-review` (PR #14 `6e461ac` 에서 땀, #14 는 11/5 main 에 병합됨 `3806f7c`) · PR #15
 
 ## 1. 목표
 
