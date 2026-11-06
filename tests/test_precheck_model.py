@@ -29,10 +29,12 @@ from echo_agent.precheck_model import (
     PrecheckReviewer,
     ReviewStatus,
     build_model_input,
+    mask_tokens,
     model_data_classes,
     parse_review_output,
     render_user_message,
     request_body_bytes,
+    secret_candidates,
 )
 from echo_agent.precheck_rules import TEXT_LIMIT, analyze, parse_snapshot
 from echo_agent.precheck_runner import (
@@ -554,6 +556,147 @@ def test_processing_never_claims_secrets_and_secret_values_stay_out() -> None:
     assert "SECRETS" not in result["processing"]["dataClasses"]
     sent = json.dumps(create.calls, ensure_ascii=False)
     assert "pw-value-123" not in sent and "tok-value-xyz" not in sent
+
+
+# 가짜 토큰은 실행 중에 이어 붙인다(저장소에 토큰 모양 문자열을 두지 않게).
+_FAKE_TOKENS = {
+    "github-ghp": "ghp_" + "T" * 36,
+    "github-gho": "gho_" + "T1" * 18,
+    "github-ghu": "ghu_" + "T2" * 18,
+    "github-ghs": "ghs_" + "T3" * 18,
+    "github-ghr": "ghr_" + "T4" * 18,
+    "github-pat": "github_pat_" + "T5_" * 20,
+    "aws-akia": "AKIA" + "TESTONLY" * 2,
+    "aws-asia": "ASIA" + "TESTONLY" * 2,
+    "gcp-api-key": "AIza" + "T" * 35,
+    "gcp-oauth": "ya29." + "a0TestOnly" * 4,
+    "slack": "xoxb-" + "1234-5678-" + "TestOnly" * 3,
+    "jwt": "eyJ" + "hbGciOiJIUzI1NiJ9" + ".eyJ" + "zdWIiOiJ0ZXN0In0" + "." + "SIG" * 12,
+    "pem": "-----BEGIN " + "PRIVATE KEY-----\nMIIE" + "T" * 60 + "\n-----END PRIVATE KEY-----",
+    "pem-truncated": "-----BEGIN " + "RSA PRIVATE KEY-----\nMIIE" + "T" * 60,
+    "bearer": "Authorization: Bearer " + "tEsT0nly" * 5,
+    "basic": "Authorization: Basic " + "dXNlcjpwYXNz" + "VGVzdA==",
+    "url-userinfo": "postgres://echo:" + "pw-TestOnly-9" + "@db.internal:5432/shop",
+    "anthropic": "sk-ant-" + "api03-" + "T" * 40,
+    "generic-sk": "sk-" + "TestOnly" * 4,
+    "echo-run": "echo_run_" + "TestOnly" * 4,
+}
+# 가린 뒤 남으면 안 되는 비밀 조각(위 값의 비밀 부분).
+_SECRET_PARTS = {
+    "pem": "T" * 60,
+    "pem-truncated": "T" * 60,
+    "bearer": "tEsT0nly",
+    "basic": "dXNlcjpwYXNz",
+    "url-userinfo": "pw-TestOnly-9",
+}
+# 알려진 패턴에 없는 고엔트로피 문자열(시험 전용 난수 모양).
+UNKNOWN_HIGH_ENTROPY = "q7Lm2Xv9Rt4Kp1Wz" + "8Yb3Nc6Hd5Fg0Js2"
+
+
+def _snapshot_with_source_config(**config: Any) -> dict[str, Any]:
+    """검증자 probe 와 같은 조합: WAS 가 허용하는 일반 설정 칸(clusterName 등)에 값을 둔다."""
+    raw = _snapshot()
+    raw["source"]["config"] = {"region": "ap-northeast-1", **config}
+    raw["target"]["config"] = {
+        "projectId": "echo-prod",
+        "region": "asia-northeast3",
+        "clusterName": "echo-gke",
+    }
+    return raw
+
+
+@pytest.mark.parametrize("name", sorted(_FAKE_TOKENS))
+def test_known_token_shapes_in_plain_fields_are_masked_without_claiming_secrets(name: str) -> None:
+    """D-21: 일반 칸의 토큰 모양도 가린다. 가렸으면 남은 값이 없으니 SECRETS 는 신고하지 않는다."""
+    value = _FAKE_TOKENS[name]
+    raw = _snapshot_with_source_config(clusterName=value, note=f"see {value} here")
+    create = FakeCreate()
+    review = _review(create, raw)
+    sent = json.dumps(create.calls, ensure_ascii=False)
+    assert value not in sent
+    assert _SECRET_PARTS.get(name, value) not in sent
+    assert "***" in sent
+    assert review.transfer is not None
+    assert "SECRETS" not in review.transfer.data_classes
+    assert "secretCandidates" not in review.detail
+
+
+def test_verifier_probe_github_pat_in_cluster_name_is_masked() -> None:
+    """검증자 재현(`pr21_probe.py`): clusterName 의 GitHub PAT 이 입력에 남고 CONFIG 만 신고했다."""
+    canary = "ghp_" + "T" * 36
+    raw = _snapshot_with_source_config(clusterName=canary)
+    payload = _run_payload()
+    payload["run"]["inputSnapshot"] = raw
+    fake = FakeWas(_routes(**{"runs:claim": lambda p, b: ok(payload)}))
+    create = FakeCreate()
+    process_run(
+        _client(fake), _claimed(fake), log=lambda m: None, reviewer=PrecheckReviewer(create)
+    )
+    (call,) = create.calls
+    assert canary not in json.dumps(call, ensure_ascii=False)
+    result = fake.bodies("result")[0]
+    _assert_was_accepts(result)
+    assert result["processing"]["dataClasses"] == ["CONFIG", "FINDINGS"]
+    # 결과의 규칙 configDiff 는 WAS 로만 가고(외부 전송 아님) WAS 가 저장 전에 다시 가린다.
+
+
+def test_unknown_high_entropy_value_claims_secrets() -> None:
+    """D-21: 가린 뒤에도 고엔트로피 토큰 후보가 남으면 SECRETS 를 신고해 WAS 가 위반으로 센다."""
+    raw = _snapshot_with_source_config(clusterName=UNKNOWN_HIGH_ENTROPY)
+    payload = _run_payload()
+    payload["run"]["inputSnapshot"] = raw
+    fake = FakeWas(_routes(**{"runs:claim": lambda p, b: ok(payload)}))
+    create = FakeCreate()
+    process_run(
+        _client(fake), _claimed(fake), log=lambda m: None, reviewer=PrecheckReviewer(create)
+    )
+    result = fake.bodies("result")[0]
+    _assert_was_accepts(result)
+    processing = result["processing"]
+    assert processing["dataClasses"] == ["CONFIG", "FINDINGS", "SECRETS"]
+    assert processing["externalTransfer"] is True
+    # 이벤트에는 후보 수만 남고 값은 남지 않는다.
+    events = json.dumps(_sent_events(fake), ensure_ascii=False)
+    assert re.search(r'"secretCandidates": [1-9]', events)
+    assert UNKNOWN_HIGH_ENTROPY not in events
+
+
+def test_secret_candidate_is_counted_in_keys_and_lists_too() -> None:
+    model_input = {
+        "source": {"config": {UNKNOWN_HIGH_ENTROPY: "x"}},
+        "list": [UNKNOWN_HIGH_ENTROPY],
+    }
+    assert secret_candidates(model_input) == 2
+    assert model_data_classes(model_input) == ("CONFIG", "SECRETS")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "sha256:" + "0123456789abcdef" * 4,  # 이미지 digest
+        "asia-northeast3-docker.pkg.dev/echo-prod/echo/shop@sha256:" + "fedcba9876543210" * 4,
+        "0123456789abcdef" * 4,  # 접두어 없는 sha256
+        "0123456789abcdef01234567" + "89abcdef01234567",  # git 커밋 40자리
+        "86df11bc-3a26-4d69-b935-1b2ad9a74be0",  # UUID
+        "projects/echo-prod/locations/asia-northeast3/clusters/echo-gke-autopilot-2026",
+        "/var/lib/echo-agent/cache/trivy-db/2026-11-06/metadata.json",
+        "arn:aws:eks:ap-northeast-1:123456789012:cluster/echo-eks-production-cluster",
+        "DATABASE_URL_FOR_PRIMARY_REPLICA_2_READ_ONLY",
+        "echo-runner@echo-prod-123456.iam.gserviceaccount.com",
+        "Basic authentication is enabled for the internal dashboard",
+        "disk-encryption-enabled-for-all-volumes",
+        "2026-11-06T10:00:00.123456789+09:00",
+    ],
+)
+def test_digests_uuids_and_long_names_are_not_secret_candidates(value: str) -> None:
+    """오탐 방지: digest·UUID·경로·이미지·긴 이름은 후보가 아니고 가리지도 않는다."""
+    raw = _snapshot_with_source_config(clusterName=value)
+    create = FakeCreate()
+    review = _review(create, raw)
+    assert secret_candidates(value) == 0
+    assert review.transfer is not None
+    assert "SECRETS" not in review.transfer.data_classes
+    assert mask_tokens(value) == value
 
 
 def test_processing_kept_when_deadline_fails_the_run_after_the_call() -> None:

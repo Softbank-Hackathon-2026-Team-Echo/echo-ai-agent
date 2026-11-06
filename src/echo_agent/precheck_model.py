@@ -4,6 +4,7 @@
 
 - 보내는 것: 스냅숏에서 허용한 칸만 새로 만든 입력 + 규칙 결과. UUID·토큰·키·비밀 이름 칸은
   넣지 않는다(SPEC D-3). 입력은 `<precheck_input>` 태그 안의 데이터다(D-4).
+  가린 뒤에도 고엔트로피 토큰 후보가 남으면 레지던시 기록에 SECRETS 를 신고한다(D-21).
 - 받는 것: `{summary, warnings[]}` → `origin: "AI"`·`result: "WARN"` finding(D-5). PASS 는 없다.
 - 실패·거절·마감 임박이면 AI 항목 없이 `model=None` 으로 돌려준다(D-7·D-8·D-9).
   실행은 규칙 결과만으로 성공으로 닫힌다.
@@ -17,7 +18,7 @@ import os
 import re
 import unicodedata
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any, Self
 
@@ -60,6 +61,7 @@ MODEL_PROVIDER = "ANTHROPIC"
 MODEL_REGION: str | None = None
 DATA_CLASS_CONFIG = "CONFIG"
 DATA_CLASS_FINDINGS = "FINDINGS"
+DATA_CLASS_SECRETS = "SECRETS"
 
 # 이름에 이 조각이 들어간 설정 칸은 모델에 보내지 않는다(대소문자·`_`·`-` 무시).
 _SENSITIVE_NAME_PARTS = (
@@ -71,9 +73,47 @@ _SENSITIVE_NAME_PARTS = (
     "privatekey",
     "apikey",
 )
-# 값 안에 섞인 토큰·키 모양(러너 토큰·실행 토큰·에이전트 토큰·Anthropic 키).
-_TOKEN_PATTERN = re.compile(r"(?:echo_(?:rnr|run|agt)_|sk-ant-)[A-Za-z0-9_\-]*")
+# 값 안에 섞인 토큰·키 모양. echo-was `app/core/log_masking.py`(`mask_secrets_in_json`) 목록을
+# 포함하고 넓힌다. 모델 입력의 모든 문자열(키 포함)과 모델 출력에 건다.
+# 개인 키 등 PEM 블록은 END 줄이 없어도(잘린 값) BEGIN 부터 끝까지 가린다.
+_PEM_BLOCK = re.compile(
+    r"-----BEGIN [A-Z0-9 ]+-----(?:.*?-----END [A-Z0-9 ]+-----|.*\Z)",
+    re.DOTALL,
+)
+# 인증 헤더 값은 낱말(Bearer·Basic)을 남긴다. 8자 이상만 본다("the bearer of ..." 를 남기게).
+_BEARER = re.compile(r"(?i)\b(Bearer)\s+[A-Za-z0-9._~+/=-]{8,}")
+# Basic 은 base64 값이 낱말처럼 보이지 않을 때만 가린다("Basic authentication" 문장은 남긴다).
+_BASIC = re.compile(r"(?i)\b(Basic)\s+([A-Za-z0-9+/]{8,}={0,2})")
+# URL 사용자 정보(`scheme://user:pass@host`)는 통째로 가린다.
+_URL_USERINFO = re.compile(r"(://)[^/\s:@]*:[^/\s@]*@")
+_TOKEN_PATTERN = re.compile(
+    r"gh[pousr]_[A-Za-z0-9]{20,}"  # GitHub 토큰(ghp_·gho_·ghu_·ghs_·ghr_)
+    r"|github_pat_[A-Za-z0-9_]{20,}"  # GitHub fine-grained 토큰
+    r"|(?:AKIA|ASIA)[0-9A-Z]{16}"  # AWS 액세스 키(장기·임시)
+    r"|AIza[0-9A-Za-z_-]{35}"  # GCP API 키
+    r"|ya29\.[0-9A-Za-z_-]+"  # GCP OAuth 액세스 토큰
+    r"|xox[abprs]-[A-Za-z0-9-]{10,}"  # Slack 토큰
+    r"|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*"  # JWT
+    r"|sk-ant-[A-Za-z0-9_-]*"  # Anthropic 키(길이 무관)
+    r"|(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}"  # 일반 API 비밀 키("disk-…" 는 남긴다)
+    r"|echo_(?:rnr|run|agt)_[A-Za-z0-9_-]*"  # Echo 러너·실행·에이전트 토큰(길이 무관)
+)
 MASK = "***"
+
+# 가리기를 통과하고도 남은 고엔트로피 토큰 후보(SPEC D-21). 이것이 있으면 SECRETS 로 신고한다.
+SECRET_CANDIDATE_MIN_LENGTH = 32
+_CANDIDATE_RUN = re.compile(rf"[A-Za-z0-9+/=_.~-]{{{SECRET_CANDIDATE_MIN_LENGTH},}}")
+# 비밀이 아닌 긴 식별자: digest(`sha256:`…, 40·64·128자리 hex)·UUID 는 후보에서 먼저 지운다.
+_NOT_SECRET = re.compile(
+    r"\b(?:sha(?:256|384|512)|md5):[0-9A-Fa-f]{32,}"
+    r"|\b[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\b"
+    r"|(?<![A-Za-z0-9])(?:[0-9A-Fa-f]{128}|[0-9A-Fa-f]{64}|[0-9A-Fa-f]{40})(?![A-Za-z0-9])"
+)
+_SEGMENT_SPLIT = re.compile(r"[/._~+=-]+")
+# 낱말처럼 읽히는 조각(소문자·대문자·첫 글자 대문자·camelCase 낱말, 8자리 이하 숫자).
+_WORD_SEGMENT = re.compile(r"[a-z]+(?:[A-Z][a-z]+)*|(?:[A-Z][a-z]+)+|[A-Z]+|[0-9]{1,8}")
+# 낱말이 아닌 조각의 글자 수가 이만큼은 돼야 후보로 본다(경로·이미지 이름 오탐 방지).
+_MIN_OPAQUE_CHARS = 16
 
 CreateMessage = Callable[..., Any]
 
@@ -137,7 +177,8 @@ class ModelTransfer:
     - `region`: Anthropic 직접 호출은 리전을 고를 수 없어 None.
     - `data_classes`: 보낸 입력의 자료 종류. 설정·변수 이름·digest·규칙 결과는 CONFIG,
       최근 보안 점검 결과·규칙 finding 이 있으면 FINDINGS. 변수 값·비밀 이름 칸은 입력에
-      넣지 않으므로(D-3) SECRETS 는 없다.
+      넣지 않고 알려진 토큰 모양은 가리므로(D-3) 보통 SECRETS 는 없다. 가린 뒤에도
+      고엔트로피 토큰 후보가 남으면 SECRETS 를 더한다(D-21).
     - `request_bytes`: 요청 본문을 JSON(UTF-8)으로 쓴 바이트 수. SDK 가 실제로 쓴 바이트와
       몇 바이트 다를 수 있는 추정값이다.
     """
@@ -284,13 +325,18 @@ def model_data_classes(model_input: Mapping[str, Any]) -> tuple[str, ...]:
     """보낼 입력의 자료 종류(echo-was `AgentRunDataClass` 이름, 그 순서).
 
     설정·변수 이름·digest·규칙 차이는 늘 CONFIG 다. 최근 보안 점검 결과나 규칙 finding 이
-    하나라도 들어가면 FINDINGS 를 더한다. 입력은 허용 목록으로 만들어 SECRETS 는 없다(D-3).
+    하나라도 들어가면 FINDINGS 를 더한다. 비밀 이름 칸은 빼고 알려진 토큰 모양은 가렸으므로
+    (D-3) 그것만으로는 SECRETS 가 아니다. 가린 뒤에도 고엔트로피 토큰 후보가 남으면 비밀이
+    섞였다고 보고 SECRETS 를 더한다(D-21, WAS 는 이것을 금지 등급 외부 전송으로 판정한다).
     """
+    classes = [DATA_CLASS_CONFIG]
     rule_results = model_input.get("ruleResults")
     rule_findings = rule_results.get("findings") if isinstance(rule_results, Mapping) else None
     if model_input.get("recentFindings") or rule_findings:
-        return (DATA_CLASS_CONFIG, DATA_CLASS_FINDINGS)
-    return (DATA_CLASS_CONFIG,)
+        classes.append(DATA_CLASS_FINDINGS)
+    if secret_candidates(model_input):
+        classes.append(DATA_CLASS_SECRETS)
+    return tuple(classes)
 
 
 def request_body_bytes(request: Mapping[str, Any]) -> int:
@@ -309,7 +355,47 @@ def is_sensitive_name(name: str) -> bool:
 
 
 def mask_tokens(text: str) -> str:
-    return _TOKEN_PATTERN.sub(MASK, text)
+    """알려진 토큰·키·인증 값 모양을 `***` 로 가린다(echo-was `mask_secrets` 상위 집합)."""
+    masked = _PEM_BLOCK.sub(MASK, text)
+    masked = _URL_USERINFO.sub(rf"\1{MASK}@", masked)
+    masked = _BEARER.sub(rf"\1 {MASK}", masked)
+    masked = _BASIC.sub(_mask_basic, masked)
+    return _TOKEN_PATTERN.sub(MASK, masked)
+
+
+def _mask_basic(match: re.Match[str]) -> str:
+    value = match[2]
+    encoded = any(ch.isdigit() or ch in "+/=" for ch in value) or (
+        any(ch.isupper() for ch in value[1:]) and any(ch.islower() for ch in value)
+    )
+    return f"{match[1]} {MASK}" if encoded else match[0]
+
+
+def secret_candidates(value: Any) -> int:
+    """가리기를 통과하고도 남은 고엔트로피 토큰 후보 수(값 자체는 돌려주지 않는다).
+
+    후보: 공백 없는 `[A-Za-z0-9+/=_.~-]` 32자 이상 덩어리 중 글자와 숫자가 섞이고, 낱말·짧은
+    숫자로 읽히지 않는 조각이 16자 이상인 것. digest(`sha256:`…, 40·64·128자리 hex)·UUID 는
+    먼저 지워 후보로 보지 않는다.
+    """
+    if isinstance(value, str):
+        return sum(1 for m in _CANDIDATE_RUN.finditer(_NOT_SECRET.sub(" ", value)) if _opaque(m[0]))
+    if isinstance(value, Mapping):
+        return sum(secret_candidates(str(k)) + secret_candidates(v) for k, v in value.items())
+    if isinstance(value, list | tuple):
+        return sum(secret_candidates(item) for item in value)
+    return 0
+
+
+def _opaque(run: str) -> bool:
+    if not (any(ch.isdigit() for ch in run) and any(ch.isalpha() for ch in run)):
+        return False
+    opaque = sum(
+        len(part)
+        for part in _SEGMENT_SPLIT.split(run)
+        if part and not _WORD_SEGMENT.fullmatch(part)
+    )
+    return opaque >= _MIN_OPAQUE_CHARS
 
 
 def _service(raw: Any) -> dict[str, Any]:
@@ -509,6 +595,20 @@ class PrecheckReviewer:
             data_classes=model_data_classes(model_input),
             request_bytes=request_body_bytes(request),
         )
+        review = self._send(request, snapshot, analysis, transfer)
+        if DATA_CLASS_SECRETS not in transfer.data_classes:
+            return review
+        # 후보 수만 이벤트에 남긴다(값은 넣지 않는다). WAS 는 SECRETS 로 위반을 센다(D-21).
+        candidates = secret_candidates(model_input)
+        return replace(review, detail={**review.detail, "secretCandidates": candidates})
+
+    def _send(
+        self,
+        request: Mapping[str, Any],
+        snapshot: PrecheckSnapshot,
+        analysis: PrecheckAnalysis,
+        transfer: ModelTransfer,
+    ) -> ModelReview:
         try:
             response = self._create(**request)
         except anthropic.APIStatusError as error:
