@@ -1,0 +1,228 @@
+{
+  "scope": "#23 standalone synthetic Python source analysis and real Claude review; no production change, HTTP or UI integration",
+  "syntheticInput": true,
+  "modelResponseMocked": false,
+  "report": {
+    "schemaVersion": 1,
+    "kind": "repo-analysis.v1",
+    "status": "ANALYZED",
+    "source": {
+      "commitSha": "e2c61e4d84e6a660461db7b9f1845bfc73583739",
+      "source": "local-git",
+      "contentHash": "sha256:fb605df440578075ecd03288690629bc1933060c339bda9c9166e8b6b13b0cc8",
+      "files": [
+        "app/main.py"
+      ],
+      "skipped": {
+        "excluded": 1
+      }
+    },
+    "migration": {
+      "source": "aws",
+      "target": "gcp"
+    },
+    "observations": [
+      {
+        "id": "RE15625facb7386f08",
+        "category": "CLOUD_SDK",
+        "location": {
+          "path": "app/main.py",
+          "line": 4
+        },
+        "evidence": {
+          "id": "RE15625facb7386f08",
+          "text": "import boto3"
+        },
+        "observation": "aws SDK import가 있습니다. 실행 경로는 미확인입니다.",
+        "certainty": "OBSERVED",
+        "origin": "RULE",
+        "severity": "MEDIUM",
+        "recommendation": "이전 후에도 해당 SDK가 필요한지, 권한과 접속 경로를 확인하세요.",
+        "riskStatus": "REQUIRES_REVIEW"
+      },
+      {
+        "id": "RE9b3f3b11aaaaead1",
+        "category": "SECRET",
+        "location": {
+          "path": "app/main.py",
+          "line": 8
+        },
+        "evidence": {
+          "id": "RE9b3f3b11aaaaead1",
+          "text": "API_TOKEN = ***"
+        },
+        "observation": "비밀값 이름에 문자열이 할당돼 있습니다. 실제 비밀인지는 미확인입니다.",
+        "certainty": "OBSERVED",
+        "origin": "RULE",
+        "severity": "HIGH",
+        "recommendation": "실제 자격 증명인지 확인하고, 맞다면 폐기·회전 후 비밀 저장소로 옮기세요.",
+        "riskStatus": "REQUIRES_REVIEW"
+      },
+      {
+        "id": "RE705ded1b56f77495",
+        "category": "REGION",
+        "location": {
+          "path": "app/main.py",
+          "line": 7
+        },
+        "evidence": {
+          "id": "RE705ded1b56f77495",
+          "text": "REGION = \"ap-northeast-1\""
+        },
+        "observation": "Python 소스에 리전 문자열 리터럴이 있습니다. 실행 여부는 미확인입니다.",
+        "certainty": "OBSERVED",
+        "origin": "RULE",
+        "severity": "MEDIUM",
+        "recommendation": "리전을 환경별 설정으로 분리하고 대상 환경에서 사용하는 값을 확인하세요.",
+        "riskStatus": "REQUIRES_REVIEW"
+      },
+      {
+        "id": "REa06951bfa1a697e5",
+        "category": "LOCAL_STATE",
+        "location": {
+          "path": "app/main.py",
+          "line": 10
+        },
+        "evidence": {
+          "id": "REa06951bfa1a697e5",
+          "text": "database = sqlite3.connect(\"state.db\")"
+        },
+        "observation": "SQLite가 파일 또는 메모리를 참조합니다. 영속성은 미확인입니다.",
+        "certainty": "OBSERVED",
+        "origin": "RULE",
+        "severity": "MEDIUM",
+        "recommendation": "데이터 영속성과 공유 필요성을 확인하고 저장소 이전을 준비하세요.",
+        "riskStatus": "REQUIRES_REVIEW"
+      },
+      {
+        "id": "REa8aa89d8cec65964",
+        "category": "LOCAL_STATE",
+        "location": {
+          "path": "app/main.py",
+          "line": 11
+        },
+        "evidence": {
+          "id": "REa8aa89d8cec65964",
+          "text": "with open(\"cache.json\", \"w\") as output:"
+        },
+        "observation": "파일 쓰기 호출이 있습니다. 마운트·복제·영속성은 미확인입니다.",
+        "certainty": "OBSERVED",
+        "origin": "RULE",
+        "severity": "MEDIUM",
+        "recommendation": "데이터 영속성과 공유 필요성을 확인하고 저장소 이전을 준비하세요.",
+        "riskStatus": "REQUIRES_REVIEW"
+      }
+    ],
+    "coverage": {
+      "syntaxErrors": 0,
+      "truncatedObservations": 0
+    },
+    "suggestions": [
+      {
+        "observationId": "RE15625facb7386f08",
+        "evidenceIds": [
+          "RE15625facb7386f08"
+        ],
+        "assessment": "NEEDS_CONTEXT",
+        "explanation": "관측된 코드: app/main.py 4행에 boto3 import가 있습니다. import만으로 AWS API가 실제 호출되는지는 확인되지 않습니다. 추론: 만약 실행 경로에서 AWS 서비스(S3, DynamoDB 등)를 호출한다면, GCP로 이전 시 AWS 자격 증명·네트워크 경로가 없을 경우 해당 기능이 동작하지 않을 수 있습니다.",
+        "recommendation": "boto3를 사용하는 실제 호출 지점과 대상 AWS 서비스를 확인하고, 이전 후에도 AWS를 계속 호출할지 또는 GCP 대응 서비스로 대체할지 결정하는 것이 좋겠습니다. 계속 사용한다면 GCP 환경에서의 자격 증명 제공 방식과 네트워크 접근 가능 여부를 검토하시기 바랍니다.",
+        "origin": "AI",
+        "certainty": "INFERRED"
+      },
+      {
+        "observationId": "RE9b3f3b11aaaaead1",
+        "evidenceIds": [
+          "RE9b3f3b11aaaaead1"
+        ],
+        "assessment": "POTENTIAL_RISK",
+        "explanation": "관측된 코드: app/main.py 8행에서 API_TOKEN 이름의 변수에 문자열이 할당되어 있습니다(값은 마스킹됨). 이것이 실제 유효한 자격 증명인지는 확인되지 않습니다. 추론: 만약 실제 토큰이라면 소스 저장소에 노출된 상태일 수 있으며, 이전 과정에서 코드가 복제·배포되면 노출 범위가 넓어질 가능성이 있습니다.",
+        "recommendation": "해당 값이 실제 자격 증명인지 담당자가 확인하고, 실제라면 폐기·회전을 검토하시기 바랍니다. 이전 후에는 GCP Secret Manager 등 비밀 저장소나 환경 변수로 주입하는 방식을 고려할 수 있습니다.",
+        "origin": "AI",
+        "certainty": "INFERRED"
+      },
+      {
+        "observationId": "RE705ded1b56f77495",
+        "evidenceIds": [
+          "RE705ded1b56f77495"
+        ],
+        "assessment": "POTENTIAL_RISK",
+        "explanation": "관측된 코드: app/main.py 7행에 AWS 리전 형식의 문자열 \"ap-northeast-1\"이 하드코딩되어 있습니다. 이 값이 실행 중 사용되는지는 확인되지 않습니다. 추론: 만약 SDK 클라이언트나 엔드포인트 구성에 사용된다면, GCP 리전 명명 체계(예: asia-northeast1)와 다르므로 이전 후 잘못된 리전 참조나 의도치 않은 AWS 리전 호출이 발생할 수 있습니다.",
+        "recommendation": "REGION 값이 어디에서 참조되는지 확인하고, 필요하다면 환경별 설정으로 분리하여 대상 GCP 환경에 맞는 값을 지정하는 방안을 검토하시기 바랍니다.",
+        "origin": "AI",
+        "certainty": "INFERRED"
+      },
+      {
+        "observationId": "REa06951bfa1a697e5",
+        "evidenceIds": [
+          "REa06951bfa1a697e5"
+        ],
+        "assessment": "NEEDS_CONTEXT",
+        "explanation": "관측된 코드: app/main.py 10행에서 상대 경로 \"state.db\"로 SQLite에 연결합니다. 저장 위치가 외부 마운트된 영속 볼륨인지는 확인되지 않습니다. 추론: 만약 GCP의 Cloud Run 등 임시 파일시스템 환경에 배포되고 영속 스토리지가 연결되지 않는다면, 재시작이나 스케일 아웃 시 데이터가 유지·공유되지 않을 수 있습니다.",
+        "recommendation": "state.db의 데이터가 영속 또는 인스턴스 간 공유가 필요한지 확인하고, 필요하다면 대상 환경의 영속 볼륨 마운트 여부나 Cloud SQL 등 관리형 저장소로의 이전을 검토하시기 바랍니다.",
+        "origin": "AI",
+        "certainty": "INFERRED"
+      },
+      {
+        "observationId": "REa8aa89d8cec65964",
+        "evidenceIds": [
+          "REa8aa89d8cec65964"
+        ],
+        "assessment": "NEEDS_CONTEXT",
+        "explanation": "관측된 코드: app/main.py 11행에서 상대 경로 \"cache.json\"에 쓰기 모드로 파일을 엽니다. 이 파일이 캐시 용도로 손실되어도 무방한지, 마운트된 스토리지에 있는지는 확인되지 않습니다. 추론: 대상 환경의 파일시스템이 임시이거나 읽기 전용이라면 쓰기 실패나 데이터 미보존이 발생할 수 있습니다.",
+        "recommendation": "cache.json의 용도와 영속성 요구를 확인하고, 대상 GCP 실행 환경에서 해당 경로의 쓰기 가능 여부 및 보존 필요 시 Cloud Storage 등 외부 저장소 사용을 검토하시기 바랍니다.",
+        "origin": "AI",
+        "certainty": "INFERRED"
+      }
+    ],
+    "model": {
+      "id": "claude-opus-5-5",
+      "effort": "medium",
+      "promptVersion": "repo-analysis-v1",
+      "refusal": false
+    },
+    "modelReviewStatus": "REVIEWED",
+    "limitations": [
+      "Python과 허용한 설정 파일의 정적 패턴만 검사했습니다.",
+      "관측은 확정된 소스 패턴입니다. 실제 실행·비밀값 유효성·이전 실패는 확정하지 않습니다.",
+      "제외·상한·문법 오류가 있을 수 있으며 발견 0건은 안전 판정이 아닙니다.",
+      "비밀값 검출·마스킹은 알려진 패턴 기반이며 모든 비밀을 탐지한다고 보장하지 않습니다."
+    ],
+    "codeExecuted": false,
+    "patches": [],
+    "simulated": false,
+    "processing": {
+      "location": "local/development",
+      "sandbox": false,
+      "modelProvider": "ANTHROPIC",
+      "model": "claude-opus-5-5",
+      "modelRegion": null,
+      "dataClasses": [
+        "SOURCE_CODE",
+        "FINDINGS",
+        "CONFIG"
+      ],
+      "externalTransfer": true,
+      "externalTransferBytes": 5191
+    },
+    "rejectedReviews": 0,
+    "modelUsage": {
+      "inputTokens": 2253,
+      "outputTokens": 1812,
+      "requestId": "req_011Cgn7tkw5HqaGc3o5FUYgd"
+    },
+    "durationSeconds": 17.815
+  },
+  "wasSchemaValidation": {
+    "accepted": true,
+    "schema": "RunResultRequest",
+    "source": "local echo-was",
+    "note": "schema only; no HTTP/API/deployment performed"
+  },
+  "publicReaderCheck": {
+    "repository": "Softbank-Hackathon-2026-Team-Echo/echo-demo-app",
+    "commitSha": "d856a1d13f19aa219ebba117c29561f838da9fe4",
+    "selectedFiles": 11,
+    "observationCount": 0,
+    "noSafetyVerdict": true
+  }
+}

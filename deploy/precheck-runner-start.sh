@@ -37,6 +37,15 @@ case "${ECHO_PRECHECK_PATCH:-off}" in
     ;;
 esac
 
+case "${ECHO_REPO_ANALYSIS:-off}" in
+  on) args+=(--repo-analysis) ;;
+  off) ;;
+  *)
+    echo "ECHO_REPO_ANALYSIS must be on or off" >&2
+    exit 2
+    ;;
+esac
+
 read_secret() {
   gcloud secrets versions access latest --secret="$1" --project="$ECHO_GCP_PROJECT" --quiet
 }
