@@ -21,6 +21,7 @@ from echo_agent.diagnosis import DiagnosisService
 from echo_agent.diagnosis_check import DockerSyntaxChecker, SyntaxSandbox
 from echo_agent.diagnosis_input import ALLOWED_FILE, MAX_SOURCE_BYTES, DiagnosisError, redact
 from echo_agent.diagnosis_model import DiagnosisModel
+from echo_agent.diagnosis_result import to_was_result
 from echo_agent.events import RunEventLog
 from echo_agent.precheck_model import ModelConfigError
 
@@ -95,6 +96,7 @@ def replay_model(line: int) -> DiagnosisModel:
     async def create(**kwargs: Any) -> Any:
         answer = {
             "analysisStatus": "diagnosed",
+            "category": "CODE",
             "summary": "저장된 응답 재생: 닫는 괄호가 없습니다.",
             "evidenceIds": ["EV000001"],
             "sourceEvidenceIds": [f"SC{line:06d}"],
@@ -229,6 +231,7 @@ async def run_demo(baseline: str, output: Path, *, live: bool, location: str) ->
         request, events=events, flush=flush
     )
     write_json(output / "result.json", result)
+    write_json(output / "was-result.json", to_was_result(result))
     write_json(output / "events.json", [event.to_json() for event in events.events])
     write_json(output / "sandbox-observations.json", containers)
     fixed_equals_baseline = False

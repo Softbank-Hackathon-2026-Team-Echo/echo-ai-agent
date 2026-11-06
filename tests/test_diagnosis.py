@@ -108,6 +108,7 @@ def no_patch(status: str = "insufficient_evidence") -> dict[str, Any]:
     return {
         **MODEL_OUTPUT,
         "analysisStatus": status,
+        "category": None,
         "canFix": False,
         "reason": "More evidence is required.",
         "edits": [],
@@ -409,8 +410,27 @@ def test_opt_in_runner_submits_diagnosis_without_precheck_findings() -> None:
     outcome = process_run(_client(fake), run, diagnoser=service, log=lambda _: None)
     assert outcome.submitted and outcome.status == "SUCCEEDED"
     result = fake.bodies("result")[0]
-    assert result["diagnosis"]["canFix"] and result["patches"]
+    assert result["diagnosis"]["fixable"] and result["patches"]
+    assert result["diagnosis"]["result"] == "DIAGNOSED"
+    assert result["diagnosis"]["category"] == "CODE"
+    assert "analysisStatus" not in result["diagnosis"]
     assert result["findings"] == [] and result["configDiff"] == []
+
+
+def test_invalid_projection_does_not_submit_or_crash_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject(result: Any) -> Any:
+        raise DiagnosisError("INVALID_DIAGNOSIS_STATE")
+
+    monkeypatch.setattr("echo_agent.diagnosis_runner.to_was_result", reject)
+    fake = FakeWas(_routes())
+    run = replace(_claimed(fake), kind="CHANGE_PROPOSAL", input_snapshot=snapshot())
+    service = DiagnosisService(DiagnosisModel(FakeModel().create), Checks(BEFORE, PASS))
+    outcome = process_run(_client(fake), run, diagnoser=service, log=lambda _: None)
+    assert not outcome.submitted and outcome.status == "FAILED"
+    assert outcome.failure_code == "INVALID_DIAGNOSIS_RESULT"
+    assert not fake.bodies("result")
 
 
 def test_was_rejection_never_drops_diagnosis_or_retries_as_precheck() -> None:

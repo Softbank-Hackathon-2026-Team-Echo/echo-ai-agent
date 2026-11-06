@@ -40,12 +40,15 @@ ECHO_GCP_PROJECT=team-echo-final bash deploy/diagnosis-demo.sh \
 | `summary.json` | live/replay, 실제 호출 수, 위치, 소요 시간, 복구 일치, 컨테이너 잔존 |
 | `initial-checks.json` | 정상 사본 PASS / 오류 사본 FAIL |
 | `result.json` | 진단·근거·수정안·수정 전후 검사 결과 |
+| `was-result.json` | WAS #98의 공개 진단 필드에 맞춘 제출용 변환. 상세 runner 스키마 수신 확인은 별도 |
 | `fix.diff`, `fixed.html` | 실제 생성된 변경분과 적용 결과. 패치가 있을 때만 생성 |
 | `events.json`, `model-calls.json` | 단계·호출 시간·요청 ID·토큰 수. API 키·원문 오류 응답 없음 |
 | `sandbox-observations.json` | 실제 컨테이너의 네트워크·권한·자원 제한. 환경 변수는 이름만 |
 | `request.json`, `broken.html`, `baseline.html`, `synthetic-source/` | 합성 실패 요청·비교 자료·실패 코드를 정확히 가리키는 로컬 전용 Git 커밋 |
 
 `simulated=true`는 실제 배포 실패가 아닌 **인위적인 오류 입력**이라는 뜻이다. 실제 호출 여부는 `summary.mode=live`, `realModelCalls`, `result.model/processing`으로 구분한다. 재생은 모델·외부 전송 기록이 없다.
+
+`was-result.json`은 `result/category/cause/fixable/unfixableReason/evidence`와 기존 AI 패치를 포함한다. 분류 근거나 원본 로그 줄 번호가 없으면 null로 두므로, 아직 공개되지 않은 WAS 상세 명세에서 null 허용 및 작업 ID 연결 방식을 확인한 뒤 운영 수신을 켜야 한다. 일반 진단 CLI에서도 `diagnose --was-result`로 같은 변환을 사용할 수 있다.
 
 ## GCP VM에서 일회성 검증
 

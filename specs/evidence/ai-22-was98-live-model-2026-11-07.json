@@ -1,0 +1,312 @@
+{
+  "scope": "WAS #98 public diagnosis projection; real Claude and local Docker syntax repair on synthetic demo source; no WAS submission or production change",
+  "baselineCommit": "d856a1d13f19aa219ebba117c29561f838da9fe4",
+  "summary": {
+    "at": "2026-11-06T17:18:14.645601+00:00",
+    "mode": "live",
+    "location": "local/development",
+    "sourceCommit": "f17cf42e89edec81fb2b07224a69fc1eabb9fbaa",
+    "baselineSha256": "19795e66ff036eccb6fcd65216045af4ef4fd08bce919ed40b8efd8d3d9cb890",
+    "realModelCalls": 1,
+    "model": {
+      "id": "claude-opus-5-5",
+      "effort": "medium",
+      "promptVersion": "diagnosis-v1.2",
+      "refusal": false
+    },
+    "status": "SUCCEEDED",
+    "failureCode": null,
+    "patchCount": 1,
+    "fixedEqualsBaseline": true,
+    "verification": {
+      "before": {
+        "available": true,
+        "passed": false,
+        "toolVersion": "v24.22.2",
+        "issues": [
+          {
+            "path": "app/static/index.html",
+            "line": 160,
+            "message": "Unexpected token '{'"
+          }
+        ],
+        "reason": null
+      },
+      "after": {
+        "available": true,
+        "passed": true,
+        "toolVersion": "v24.22.2",
+        "issues": [],
+        "reason": null
+      }
+    },
+    "durationSeconds": 10.789,
+    "ourContainersRemaining": [],
+    "syntheticInput": true,
+    "fullAppRuntimeChecked": false,
+    "productionChanged": false,
+    "passed": true
+  },
+  "modelCalls": [
+    {
+      "at": "2026-11-06T17:18:04.658190+00:00",
+      "mocked": false,
+      "model": "claude-opus-5-5",
+      "requestId": "req_011Cgn4APBrRW5x4aZFPFDsD",
+      "inputTokens": 21191,
+      "outputTokens": 610,
+      "durationSeconds": 8.986
+    }
+  ],
+  "wasResult": {
+    "status": "SUCCEEDED",
+    "failureCode": null,
+    "simulated": true,
+    "sandbox": null,
+    "model": {
+      "id": "claude-opus-5-5",
+      "effort": "medium",
+      "promptVersion": "diagnosis-v1.2",
+      "refusal": false
+    },
+    "configDiff": [],
+    "featureGaps": [],
+    "findings": [],
+    "patches": [
+      {
+        "id": "diagnosis-8bb28f6af3329715",
+        "patchHash": "sha256:8bb28f6af3329715ace21d7f9454b136285b41057324db26c6a4f72547db626c",
+        "files": [
+          "app/static/index.html"
+        ],
+        "diff": "--- a/app/static/index.html\n+++ b/app/static/index.html\n@@ -157,7 +157,7 @@\n     strip: [],\n   };\n \n-  async function fetchJson(url, options, timeoutMs {\n+  async function fetchJson(url, options, timeoutMs) {\n     const ctrl = new AbortController();\n     const timer = setTimeout(() => ctrl.abort(), timeoutMs);\n     try {\n",
+        "reason": "로그(EV000001, EV000002)가 index.html:160에서 \"Unexpected token '{'\" 오류를 보고하며, 해당 줄(SC000160)은 `async function fetchJson(url, options, timeoutMs {`로 매개변수 목록이 닫히지 않은 상태입니다. timeoutMs 뒤에 ')'를 추가하면 함수 선언이 올바른 형태가 되며 다른 동작은 변경되지 않습니다.",
+        "touchesProtectedFiles": false,
+        "origin": "AI",
+        "checks": [
+          {
+            "name": "DIFF_APPLIES",
+            "result": "PASS",
+            "summary": "원본 코드에 수정안을 정확히 적용할 수 있습니다."
+          },
+          {
+            "name": "POLICY",
+            "result": "PASS",
+            "policyVersion": "diagnosis-v1",
+            "summary": "허용된 기존 inline JavaScript만 변경했습니다."
+          },
+          {
+            "name": "JAVASCRIPT_SYNTAX",
+            "result": "PASS",
+            "toolVersion": "v24.22.2",
+            "summary": "같은 문법 검사에서 원본은 실패하고 수정본은 통과했습니다."
+          }
+        ]
+      }
+    ],
+    "blockedAttempts": [],
+    "diagnosis": {
+      "result": "DIAGNOSED",
+      "category": "CODE",
+      "cause": "app/static/index.html 160번째 줄의 fetchJson 함수 선언에서 매개변수 목록의 닫는 괄호 ')'가 빠져 있어 인라인 스크립트 구문 검사가 SyntaxError로 실패했습니다.",
+      "fixable": true,
+      "unfixableReason": null,
+      "evidence": [
+        {
+          "source": "LOG",
+          "line": null,
+          "text": "app/static/index.html:160: SyntaxError: Unexpected token '{'"
+        },
+        {
+          "source": "FILE",
+          "line": 160,
+          "text": "  async function fetchJson(url, options, timeoutMs {",
+          "path": "app/static/index.html"
+        }
+      ]
+    },
+    "processing": {
+      "location": "local/development",
+      "sandbox": false,
+      "modelProvider": "ANTHROPIC",
+      "model": "claude-opus-5-5",
+      "modelRegion": null,
+      "dataClasses": [
+        "LOGS",
+        "SOURCE_CODE"
+      ],
+      "externalTransfer": true,
+      "externalTransferBytes": 53086
+    }
+  },
+  "events": [
+    {
+      "seq": 1,
+      "at": "2026-11-06T17:18:03.863721Z",
+      "step": "INPUT_LOAD",
+      "level": "INFO",
+      "message": "diagnosis input prepared",
+      "data": {
+        "logs": 1,
+        "sourceAvailable": true
+      }
+    },
+    {
+      "seq": 2,
+      "at": "2026-11-06T17:18:03.863991Z",
+      "step": "SANDBOX_CREATE",
+      "level": "INFO",
+      "message": "checking original JavaScript syntax",
+      "data": {}
+    },
+    {
+      "seq": 3,
+      "at": "2026-11-06T17:18:04.657364Z",
+      "step": "SANDBOX_DELETE",
+      "level": "INFO",
+      "message": "original syntax checker finished",
+      "data": {
+        "available": true,
+        "passed": false
+      }
+    },
+    {
+      "seq": 4,
+      "at": "2026-11-06T17:18:04.657497Z",
+      "step": "ANALYZE",
+      "level": "INFO",
+      "message": "diagnosis model request",
+      "data": {
+        "attempt": 1
+      }
+    },
+    {
+      "seq": 5,
+      "at": "2026-11-06T17:18:13.650226Z",
+      "step": "PATCH_PROPOSE",
+      "level": "INFO",
+      "message": "diagnosis edit drafted; syntax verification pending",
+      "data": {
+        "attempt": 1
+      }
+    },
+    {
+      "seq": 6,
+      "at": "2026-11-06T17:18:14.520626Z",
+      "step": "PATCH_VERIFY",
+      "level": "INFO",
+      "message": "candidate syntax checker finished",
+      "data": {
+        "attempt": 1,
+        "available": true,
+        "passed": true
+      }
+    }
+  ],
+  "sandboxObservations": [
+    {
+      "name": "echo-ws-syntax-5ab8400b5253",
+      "image": "node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9",
+      "networkMode": "none",
+      "readOnlyRoot": true,
+      "user": "65532:65532",
+      "capDrop": [
+        "ALL"
+      ],
+      "securityOpt": [
+        "no-new-privileges"
+      ],
+      "memory": 536870912,
+      "nanoCpus": 1000000000,
+      "pidsLimit": 128,
+      "bindMounts": null,
+      "environmentKeys": [
+        "HOME",
+        "PATH",
+        "NODE_VERSION",
+        "YARN_VERSION"
+      ]
+    },
+    {
+      "name": "echo-ws-syntax-207e824d14e0",
+      "image": "node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9",
+      "networkMode": "none",
+      "readOnlyRoot": true,
+      "user": "65532:65532",
+      "capDrop": [
+        "ALL"
+      ],
+      "securityOpt": [
+        "no-new-privileges"
+      ],
+      "memory": 536870912,
+      "nanoCpus": 1000000000,
+      "pidsLimit": 128,
+      "bindMounts": null,
+      "environmentKeys": [
+        "HOME",
+        "PATH",
+        "NODE_VERSION",
+        "YARN_VERSION"
+      ]
+    },
+    {
+      "name": "echo-ws-syntax-419836bdda65",
+      "image": "node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9",
+      "networkMode": "none",
+      "readOnlyRoot": true,
+      "user": "65532:65532",
+      "capDrop": [
+        "ALL"
+      ],
+      "securityOpt": [
+        "no-new-privileges"
+      ],
+      "memory": 536870912,
+      "nanoCpus": 1000000000,
+      "pidsLimit": 128,
+      "bindMounts": null,
+      "environmentKeys": [
+        "HOME",
+        "PATH",
+        "NODE_VERSION",
+        "YARN_VERSION"
+      ]
+    },
+    {
+      "name": "echo-ws-syntax-ebc7ae7bad99",
+      "image": "node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9",
+      "networkMode": "none",
+      "readOnlyRoot": true,
+      "user": "65532:65532",
+      "capDrop": [
+        "ALL"
+      ],
+      "securityOpt": [
+        "no-new-privileges"
+      ],
+      "memory": 536870912,
+      "nanoCpus": 1000000000,
+      "pidsLimit": 128,
+      "bindMounts": null,
+      "environmentKeys": [
+        "HOME",
+        "PATH",
+        "NODE_VERSION",
+        "YARN_VERSION"
+      ]
+    }
+  ],
+  "schemaCorrection": {
+    "initialFailureCode": "MODEL_REQUEST_REJECTED",
+    "httpStatus": 400,
+    "reason": "Provider rejected enum combined with type array [string, null]",
+    "fix": "Separate string enum and null into anyOf branches",
+    "verification": "Live diagnosis succeeded after correction"
+  },
+  "pendingContract": [
+    "Nullable category for unsupported cause and nullable LOG.line without original line number",
+    "Server-owned deployment/environment/commit association",
+    "Final runner request/result schema and downstream integration"
+  ]
+}

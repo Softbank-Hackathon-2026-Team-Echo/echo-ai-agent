@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from echo_agent.diagnosis import DiagnosisService
+from echo_agent.diagnosis_input import DiagnosisError
+from echo_agent.diagnosis_result import to_was_result
 from echo_agent.events import RunEventLog
 from echo_agent.was_client import (
     ClaimedRun,
@@ -56,12 +58,15 @@ def process_diagnosis_run(
         if clock() >= run.deadline_at:
             return run.id, "LOST", None, False
         # Never strip diagnosis or re-submit as PRECHECK on schema rejection.
-        status = client.submit_result(run, result)
+        status = client.submit_result(run, to_was_result(result))
         return run.id, status or str(result["status"]), result["failureCode"], True
     except RunNotActiveError:
         return run.id, "LOST", None, False
     except ResultAlreadySubmittedError:
         return run.id, "ALREADY_SUBMITTED", None, False
+    except DiagnosisError:
+        # Do not submit an inconsistent patch or stop the long-lived polling runner.
+        return run.id, "FAILED", "INVALID_DIAGNOSIS_RESULT", False
     except (WasError, OSError):
         return run.id, "FAILED", "RESULT_SUBMISSION_FAILED", False
     finally:

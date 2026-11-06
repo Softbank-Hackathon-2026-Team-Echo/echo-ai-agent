@@ -25,6 +25,7 @@ from echo_agent.diagnosis_input import (
     strict_json,
 )
 from echo_agent.diagnosis_model import DiagnosisModel
+from echo_agent.diagnosis_result import to_was_result
 from echo_agent.precheck_model import ModelConfigError
 
 
@@ -71,6 +72,9 @@ def main(argv: list[str] | None = None) -> int:
     diagnose.add_argument(
         "--model-response", type=Path, help="offline model replay; always simulated, no API calls"
     )
+    diagnose.add_argument(
+        "--was-result", action="store_true", help="project output to WAS #98 diagnosis fields"
+    )
     args = parser.parse_args(argv)
     try:
         if args.command == "check":
@@ -104,6 +108,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             model = DiagnosisModel.from_env()
         result = asyncio.run(DiagnosisService(model).execute(snapshot))
+        if args.was_result:
+            result = to_was_result(result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["status"] == "SUCCEEDED" else 1
     except (OSError, UnicodeError, DiagnosisError, ModelConfigError) as error:

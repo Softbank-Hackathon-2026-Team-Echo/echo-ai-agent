@@ -1,6 +1,6 @@
 # #22 오류 진단·실제 diff 생성 — v1
 
-상태: **앞단 구현·실제 GCP 검증 완료 / WAS 계약 협의 중 / 운영 수신 기본 off** (2026-11-07)
+상태: **앞단 구현·실제 GCP 검증 완료 / WAS #98 공개 결과 필드 반영 / 상세 runner 명세·통합 대기 / 운영 수신 기본 off** (2026-11-07)
 
 - 요청: [echo-ai-agent #22](https://github.com/Softbank-Hackathon-2026-Team-Echo/echo-ai-agent/issues/22)
 - 분담·계약 제안: [댓글](https://github.com/Softbank-Hackathon-2026-Team-Echo/echo-ai-agent/issues/22#issuecomment-6688870908)
@@ -42,15 +42,33 @@
 
 WAS #97의 `failure.{code,message,containerReason,terminationReason,exitCode,logTail,logTruncated}`를 받을 수 있다. 별도 `logs`가 없으면 logTail을 runtime 로그로 변환한다. **#97은 컨테이너 로그 수집이다. 이번 프론트 문법 실패는 빌드 검사 로그를 추가 전달해야 한다.** 이미지가 없는 빌드 실패를 지원하고 digest를 요구하지 않는다.
 
-결과는 기존 `RunResult` 공통 칸에 선택 `diagnosis`를 추가하는 제안이다:
+결과는 기존 `RunResult` 공통 칸에 선택 `diagnosis`를 추가한다. **WAS 제출용 결과와 로컬 검증 기록을 구분**한다. [WAS #98 §3](https://github.com/Softbank-Hackathon-2026-Team-Echo/echo-was/issues/98) 및 지민님의 필드 지정 답변에 맞춘 제출용 변환은 다음과 같다:
 
-- `diagnosis`: analysisStatus(diagnosed/insufficient_evidence/no_failure_evidence), summary, evidenceIds/sourceEvidenceIds, canFix, reason, limitations, 인용한 evidence/sourceEvidence, verification.before/after.
-- `diagnosis.inputBinding`: deployRequestId, sourceCommit, sourceSha256, commitVerification=`caller_supplied`. WAS가 해당 커밋에서 가져온 바이트라는 책임을 진다. 러너는 GitHub 인증·조회·커밋 검증을 임의로 하지 않는다.
+| 제출 필드 | 의미와 변환 |
+|---|---|
+| `result` | 내부 analysisStatus를 `DIAGNOSED` / `INSUFFICIENT_EVIDENCE` / `NO_FAILURE_EVIDENCE`로 변환 |
+| `category` | 근거에 따라 `CODE` / `CONFIG` / `BUILD` / `RUNTIME` / `PLATFORM`. 분류 근거가 없으면 null |
+| `cause` | 한국어 진단 summary |
+| `fixable` | CODE 진단이고 실제 원본 문법 FAIL·수정본 PASS·패치 생성까지 확인한 경우에만 true |
+| `unfixableReason` | 수정할 수 없거나 검증하지 못한 이유. fixable=true일 때 null |
+| `evidence` | 로그는 `source=LOG`, 소스는 `source=FILE`. `line`, `text`, FILE의 `path`를 제공 |
+
+- 모델에 category를 요청하고 허용 enum·진단 상태와의 일관성을 코드로 검사한다. 모델/API 실패는 완료된 원인 분석으로 표시하지 않고 작업 FAILED·INSUFFICIENT_EVIDENCE로 반환한다.
+- LOG의 원래 줄 번호가 없으면 `line=null`이다. tail 안의 순번이나 오류 메시지에 표시된 **코드** 줄 번호를 **로그** 줄 번호로 바꾸지 않는다. FILE의 줄 번호는 전달된 소스의 실제 줄 번호다.
+- `diagnosis_result.to_was_result`가 제출용 6개 필드만 만든다. 상세 검증·근거 ID·바인딩 기록은 로컬 `result.json`에 보존한다. 변환 후 결과는 `was-result.json`으로 함께 저장한다.
+- 로컬 `diagnosis`: analysisStatus, category, summary, evidenceIds/sourceEvidenceIds, canFix, reason, limitations, 인용한 evidence/sourceEvidence, verification.before/after.
+- 로컬 `diagnosis.inputBinding`: deployRequestId, sourceCommit, sourceSha256, commitVerification=`caller_supplied`. WAS가 해당 커밋에서 가져온 바이트라는 책임을 진다. 러너는 GitHub 인증·조회·커밋 검증을 임의로 하지 않는다.
 - `patches`: 기존 `{id,patchHash,files,diff,reason,touchesProtectedFiles,checks,origin}` 유지. files/diff 경로는 **고객 저장소 기준 `app/static/index.html`**이다. origin=AI. checks는 DIFF_APPLIES/POLICY/JAVASCRIPT_SYNTAX뿐이며 빌드·스캔 통과를 꾸미지 않는다.
 - `processing`: 실제 시도한 모델 요청의 LOGS/SOURCE_CODE와 전송량 추정치를 기록. 거절/실패에도 보존. 모델 호출은 컨테이너 밖이므로 sandbox=false, Anthropic 직접 호출이라 modelRegion=null이다. 로컬 CLI는 local/development, VM 러너는 기존 gcp/asia-northeast3로 기록한다.
 - 유효한 근거 부족·수정 불가 진단도 작업 자체는 SUCCEEDED이고 patches는 비어 있다. 모델/입력/검증 계약 오류는 FAILED다. 이전의 유효하지 않은 패치는 반환하지 않는다.
 
-WAS가 모르는 결과를 422로 거절하면 결과를 벗기거나 PRECHECK로 재전송하지 않는다. 한 번 제출 실패로 기록하고 자동 진단 수신은 운영에서 켜지 않는다.
+**미확정 계약:** 확인 시점 WAS main `30aca36`에 예정된 `specs/api-98-failed-deploy-diagnosis.md`는 없다. #98 §3은 화면 조회 결과 예시이므로 이 변환만으로 실제 runner 제출 스키마 호환을 보장하지 않는다. 다음은 상세 명세에서 확인할 항목이다:
+
+1. 근거가 없는 category와 원본 줄 번호를 모르는 LOG.line의 null 허용 여부. 확인 전에 임의의 분류나 줄 번호를 채우지 않는다.
+2. 상세 조회의 deployRequestId/environmentId/sourceCommitSha를 WAS의 작업 연관 정보에서 붙이는지, runner 결과에도 요구하는지. 현재는 제출용 diagnosis에 넣지 않으며 환경 이름으로 environmentId를 추측하지 않는다.
+3. 정확한 실패 소스 전달 방식, 기존 공통 결과 필드·processing 수신, 내부 검증 기록의 서버 저장 위치. 현재 inputSnapshot은 위 제안 형태를 유지한다.
+
+WAS가 모르는 결과를 422로 거절하면 결과를 벗기거나 PRECHECK로 재전송하지 않는다. 잘못된 내부 진단 변환도 제출하지 않고 로컬 `INVALID_DIAGNOSIS_RESULT`로 기록하며 폴링 프로세스를 유지한다. 이 경우 서버 작업 완료가 아니라 lease 만료/복구 대상이다. 자동 진단 수신은 운영에서 켜지 않는다.
 
 ## 3. 근거·수정 검증
 
@@ -82,7 +100,7 @@ uv run python -m echo_agent.diagnosis_cli diagnose \
   --model-response tests/fixtures/diagnosis/model-response.json
 ```
 
-fixture의 소스·커밋·로그와 모델 답은 합성 자료다. 재생 결과는 항상 simulated=true, model=null, processing 없음이다. 실제 Node 검사를 사용하지만 실제 Claude 품질이나 운영 통합 성공의 증거는 아니다. `--model-response`를 생략하면 ANTHROPIC_API_KEY가 필요하고 실제 과금 호출이 발생한다. CLI는 결과 JSON만 출력하며 저장·배포·PR 생성을 하지 않는다.
+fixture의 소스·커밋·로그와 모델 답은 합성 자료다. 재생 결과는 항상 simulated=true, model=null, processing 없음이다. 실제 Node 검사를 사용하지만 실제 Claude 품질이나 운영 통합 성공의 증거는 아니다. `--model-response`를 생략하면 ANTHROPIC_API_KEY가 필요하고 실제 과금 호출이 발생한다. CLI는 결과 JSON만 출력하며 저장·배포·PR 생성을 하지 않는다. `--was-result`를 더하면 로컬 상세 기록 대신 #98 제출용 필드로 변환한 결과를 출력한다.
 
 ## 5. 통합 전 인수 조건과 되돌리기
 
@@ -123,3 +141,12 @@ fixture의 소스·커밋·로그와 모델 답은 합성 자료다. 재생 결�
 - 전체 pytest **370 passed**, skip 0. Ruff lint/format·mypy(strict)·쉘 문법·패키지 빌드 통과. Wheel에 `diagnosis_demo.py`·Node 검사 리소스 포함 확인.
 - 실행 뒤 기존 러너 active·기존 release `82aac70` 유지 확인. 이번 임시 코드/결과 디렉터리와 전송 파일을 제거했다. 고정 Node 이미지는 이후 검증을 위한 캐시로 남겼다.
 - WAS·화면·사람 승인·고객 앱 빌드/Trivy/헬스체크·실제 저장소 반영/재배포는 여전히 통합 확인 대상으로 남는다.
+
+### WAS #98 공개 결과 형식 반영 (2026-11-07 02:18 KST)
+
+- `diagnosis-v1.2`에서 원인 category를 근거와 함께 요청한다. 러너 제출 시 내부 기록을 공개 필드로 변환하고, 기존 AI 패치·processing·공통 결과는 유지한다. CLI `--was-result`, 시연의 `was-result.json`에서도 같은 결과를 확인할 수 있다.
+- 근거 부족·실패 없음·다섯 category·검증 실패·API 실패·원본 로그 줄 번호 부재·변환 실패·WAS 422 거절을 시험했다. 공개 이슈의 필드 변환과 FakeWas 회귀 시험이며 실제 WAS validator 통과를 뜻하지 않는다.
+- 전체 **392 tests passed**, skip 0. 스키마 표현 수정 후 관련 80개 재확인. Ruff lint/format·mypy·패키지 빌드 통과.
+- 실제 API가 nullable enum과 type 배열 조합을 400으로 거절하여 string enum/null을 `anyOf`로 분리했다. 수정 후 Claude **1회, 8.986초**, 진단부터 수정본 검사까지 **10.789초**로 성공했다. 원본 FAIL → 수정본 PASS, 정상 코드와 완전 일치, 컨테이너 잔존 0개.
+- 제출용 진단은 `DIAGNOSED / CODE / fixable=true`, 한국어 원인·LOG/FILE 근거·기존 AI 패치로 생성되었다. LOG.line=null, FILE.line=160을 구분했다.
+- [실행 증거](evidence/ai-22-was98-live-model-2026-11-07.json). 이번 추가 검증은 **로컬 Docker + Anthropic API**이며 이전 GCP 검증과 구분한다. WAS 상세 명세 부재·null 허용·작업 ID 연결·실제 통합은 여전히 대기 중이다. 운영 자동 수신은 off다.

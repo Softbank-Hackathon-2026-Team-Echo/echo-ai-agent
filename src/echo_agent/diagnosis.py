@@ -57,6 +57,7 @@ def unified_diff(original: str, patched: str) -> str:
 def _empty_diagnosis(request: DiagnosisInput, evidence: Evidence) -> dict[str, Any]:
     return {
         "analysisStatus": "insufficient_evidence",
+        "category": None,
         "summary": "분석할 실패 근거가 부족합니다.",
         "evidenceIds": [],
         "sourceEvidenceIds": [],

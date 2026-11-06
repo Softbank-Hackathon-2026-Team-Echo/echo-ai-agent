@@ -1,5 +1,6 @@
 {
   "analysisStatus": "diagnosed",
+  "category": "CODE",
   "summary": "counter 선언의 등호 뒤에 값이 없어 JavaScript 문법 검사가 실패했습니다.",
   "evidenceIds": ["EV000001"],
   "sourceEvidenceIds": ["SC000005"],

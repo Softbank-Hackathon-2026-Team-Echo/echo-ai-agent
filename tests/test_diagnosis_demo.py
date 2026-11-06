@@ -27,6 +27,11 @@ async def test_demo_replay_uses_real_docker_without_calling_model_api(
     assert result["model"] is None and "processing" not in result
     assert result["diagnosis"]["verification"]["before"]["passed"] is False
     assert result["diagnosis"]["verification"]["after"]["passed"] is True
+    wire = json.loads((out / "was-result.json").read_text())
+    assert wire["diagnosis"]["result"] == "DIAGNOSED"
+    assert wire["diagnosis"]["category"] == "CODE" and wire["diagnosis"]["fixable"]
+    assert wire["patches"] == result["patches"]
+    assert "verification" not in wire["diagnosis"]
     assert (out / "fixed.html").read_text() == BASELINE
     assert (out.stat().st_mode & 0o777) == 0o700
     for container in json.loads((out / "sandbox-observations.json").read_text()):
