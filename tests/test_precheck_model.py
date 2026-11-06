@@ -5,6 +5,7 @@ SPEC `specs/ai-4-precheck-model-review.md` AC-1~AC-10.
 
 import copy
 import json
+import re
 import threading
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -28,11 +29,20 @@ from echo_agent.precheck_model import (
     PrecheckReviewer,
     ReviewStatus,
     build_model_input,
+    model_data_classes,
     parse_review_output,
     render_user_message,
+    request_body_bytes,
 )
 from echo_agent.precheck_rules import TEXT_LIMIT, analyze, parse_snapshot
-from echo_agent.precheck_runner import main, process_run, run_loop
+from echo_agent.precheck_runner import (
+    FAILURE_DEADLINE,
+    build_processing,
+    build_result,
+    main,
+    process_run,
+    run_loop,
+)
 from tests.test_precheck_rules import SOURCE_ID, TARGET_ID, _snapshot
 from tests.test_was_client import (
     RUN_CRED,
@@ -348,12 +358,44 @@ def test_main_without_key_exits_before_claiming(monkeypatch: pytest.MonkeyPatch)
 # ---------------------------------------------------------------- 러너 한 바퀴
 
 
+PROCESSING_KEYS = {
+    "location", "sandbox", "modelProvider", "model", "modelRegion",
+    "dataClasses", "externalTransfer", "externalTransferBytes",
+}  # fmt: skip
+
+
+def _assert_was_accepts_processing(processing: dict[str, Any]) -> None:
+    """echo-was `RunProcessingRequest`(origin/main `2d99c49`) 검사를 그대로 옮긴 것."""
+    assert set(processing) <= PROCESSING_KEYS
+    assert re.fullmatch(r"[a-z][a-z0-9-]{0,15}/[a-z0-9-]{1,40}", processing["location"])
+    assert type(processing["sandbox"]) is bool  # StrictBool
+    assert type(processing["externalTransfer"]) is bool
+    provider = processing["modelProvider"]
+    assert provider in {"NONE", "LOCAL", "GOOGLE_VERTEX", "AWS_BEDROCK", "OPENAI", "ANTHROPIC"}
+    model, region = processing.get("model"), processing.get("modelRegion")
+    assert model is None or re.fullmatch(r"[A-Za-z0-9._:/@-]{1,64}", model)
+    assert region is None or re.fullmatch(r"[a-z0-9-]{1,40}", region)
+    classes = processing["dataClasses"]
+    assert set(classes) <= {"CONFIG", "FINDINGS", "SOURCE_CODE", "LOGS", "SECRETS"}
+    assert len(classes) == len(set(classes)) <= 5
+    size = processing.get("externalTransferBytes")
+    assert size is None or (type(size) is int and 0 <= size <= 2**63 - 1)
+    if provider == "NONE":
+        assert (model, region, classes, processing["externalTransfer"]) == (None, None, [], False)
+    else:
+        assert model is not None
+    if not processing["externalTransfer"]:
+        assert not size
+
+
 def _assert_was_accepts(result: dict[str, Any]) -> None:
     """echo-was `app/schemas/runner.py`(origin/main) 의 결과 검사 중 이 러너에 걸리는 것."""
-    assert set(result) == {
+    assert set(result) - {"processing"} == {
         "status", "failureCode", "simulated", "sandbox", "model",
         "configDiff", "featureGaps", "findings", "patches", "blockedAttempts",
     }  # fmt: skip
+    if result.get("processing") is not None:
+        _assert_was_accepts_processing(result["processing"])
     assert "\x00" not in json.dumps(result)
     assert len(result["findings"]) <= 100 and len(result["configDiff"]) <= 200
     model = result["model"]
@@ -405,6 +447,17 @@ def test_full_run_with_model_fills_model_and_ai_warnings() -> None:
     assert all(len(e["message"]) <= 200 for e in events)
     assert all(len(json.dumps(e["data"], ensure_ascii=False)) <= 2_000 for e in events)
     assert RUN_CRED not in json.dumps(result)  # 결과 본문(헤더 아님)
+    # 레지던시 기록: Anthropic 직접 호출(리전 없음), 비밀값 안 보냄(echo-was #80 조건부 허용)
+    assert result["processing"] == {
+        "location": "gcp/asia-northeast3",
+        "sandbox": False,
+        "modelProvider": "ANTHROPIC",
+        "model": DEFAULT_MODEL,
+        "modelRegion": None,
+        "dataClasses": ["CONFIG", "FINDINGS"],
+        "externalTransfer": True,
+        "externalTransferBytes": request_body_bytes(create.calls[0]),
+    }
 
 
 @pytest.mark.parametrize(
@@ -427,6 +480,10 @@ def test_runner_model_failure_still_succeeds(result: Any, message: str) -> None:
     last = _sent_events(fake)[-1]
     assert (last["message"], last["level"]) == (message, "WARN")
     assert outcome.submitted and outcome.review in {"FAILED", "REFUSED"}
+    # 요청은 나갔으므로 model=null 이어도 레지던시 기록은 남긴다(processing 과 model 은 따로).
+    processing = sent["processing"]
+    assert (processing["modelProvider"], processing["model"]) == ("ANTHROPIC", DEFAULT_MODEL)
+    assert processing["externalTransfer"] is True and processing["externalTransferBytes"] > 0
 
 
 def test_runner_skips_model_near_deadline() -> None:
@@ -441,3 +498,111 @@ def test_runner_skips_model_near_deadline() -> None:
     assert fake.bodies("result")[0]["status"] == "SUCCEEDED"
     assert outcome.review == "SKIPPED"
     assert _sent_events(fake)[-1]["message"] == "model review skipped; deadline too close"
+    assert "processing" not in fake.bodies("result")[0]  # 부르지 않았으니 기록할 전송이 없다
+
+
+# ---------------------------------------------------------------- 레지던시 기록 processing
+
+
+def test_no_model_run_sends_no_processing() -> None:
+    """`--no-model`(ECHO_PRECHECK_MODEL=off): 칸을 빼고 낸다 → WAS 는 \"기록 없음\"으로 센다."""
+    fake = FakeWas(_routes())
+    process_run(_client(fake), _claimed(fake), log=lambda m: None)
+    result = fake.bodies("result")[0]
+    _assert_was_accepts(result)
+    assert "processing" not in result
+
+
+def test_processing_counts_the_bytes_of_the_request_actually_sent() -> None:
+    create = FakeCreate()
+    review = _review(create)
+    assert review.transfer is not None
+    (call,) = create.calls
+    body = {k: v for k, v in call.items() if k not in ("timeout", "betas")}
+    expected = len(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    assert review.transfer.request_bytes == expected > len(call["messages"][0]["content"])
+    assert (review.transfer.provider, review.transfer.region) == ("ANTHROPIC", None)
+
+
+def test_processing_model_is_the_requested_model_even_on_fallback() -> None:
+    """`processing.model` 은 요청한 모델, 결과 `model.id` 는 실제로 답한 모델(D-10)."""
+    review = _review(FakeCreate(_response(model="claude-opus-4-8")))
+    processing = build_processing(review)
+    assert review.model is not None and review.model.id == "claude-opus-4-8"
+    assert processing is not None and processing["model"] == DEFAULT_MODEL
+
+
+def test_data_classes_follow_what_the_model_input_holds() -> None:
+    raw = _snapshot()
+    model_input = build_model_input(raw, parse_snapshot(raw), analyze(raw))
+    assert model_data_classes(model_input) == ("CONFIG", "FINDINGS")
+    bare = {**model_input, "recentFindings": [], "ruleResults": {"configDiff": [], "findings": []}}
+    assert model_data_classes(bare) == ("CONFIG",)
+
+
+def test_processing_never_claims_secrets_and_secret_values_stay_out() -> None:
+    """변수 값·비밀 이름 칸을 보내지 않으므로 SECRETS 가 없다(echo-was 조건부 허용의 근거)."""
+    payload = _run_payload()
+    payload["run"]["inputSnapshot"] = _hostile_snapshot()
+    fake = FakeWas(_routes(**{"runs:claim": lambda p, b: ok(payload)}))
+    create = FakeCreate()
+    process_run(
+        _client(fake), _claimed(fake), log=lambda m: None, reviewer=PrecheckReviewer(create)
+    )
+    result = fake.bodies("result")[0]
+    _assert_was_accepts(result)
+    assert "SECRETS" not in result["processing"]["dataClasses"]
+    sent = json.dumps(create.calls, ensure_ascii=False)
+    assert "pw-value-123" not in sent and "tok-value-xyz" not in sent
+
+
+def test_processing_kept_when_deadline_fails_the_run_after_the_call() -> None:
+    """모델 호출 뒤 마감으로 FAILED 가 돼도 이미 나간 요청은 기록한다(계약: FAILED 여도 true)."""
+    now = datetime.now(UTC)
+    deadline = now + timedelta(minutes=15)
+    clock = {"now": now}
+
+    class SlowCreate(FakeCreate):
+        def __call__(self, **kwargs: Any) -> SimpleNamespace:
+            clock["now"] = deadline  # 응답이 마감 직전에 왔다
+            return super().__call__(**kwargs)
+
+    fake = FakeWas(_routes(**{"runs:claim": lambda p, b: ok(_run_payload(deadline))}))
+    process_run(
+        _client(fake),
+        _claimed(fake),
+        clock=lambda: clock["now"],
+        log=lambda m: None,
+        reviewer=PrecheckReviewer(SlowCreate()),
+    )
+    result = fake.bodies("result")[0]
+    _assert_was_accepts(result)
+    assert (result["status"], result["failureCode"], result["model"]) == (
+        "FAILED",
+        FAILURE_DEADLINE,
+        None,
+    )
+    assert result["processing"]["externalTransfer"] is True
+
+
+def test_processing_dropped_when_model_name_breaks_the_was_pattern() -> None:
+    """WAS 가 422 로 결과 전체를 거절하지 않게, 패턴에 맞지 않는 모델 이름이면 칸을 뺀다."""
+    raw = _snapshot()
+    review = PrecheckReviewer(FakeCreate(), model="bad model name").review(
+        raw, parse_snapshot(raw), analyze(raw), seconds_left=PLENTY
+    )
+    assert review.transfer is not None
+    assert build_processing(review) is None
+    assert build_processing(None) is None
+
+
+def test_build_result_without_processing_keeps_the_previous_shape() -> None:
+    analysis = analyze(_snapshot())
+    plain = build_result(analysis, status="SUCCEEDED", failure_code=None)
+    assert "processing" not in plain
+    processing = build_processing(_review(FakeCreate()))
+    assert processing is not None
+    with_record = build_result(
+        analysis, status="SUCCEEDED", failure_code=None, processing=processing
+    )
+    assert with_record == {**plain, "processing": processing}

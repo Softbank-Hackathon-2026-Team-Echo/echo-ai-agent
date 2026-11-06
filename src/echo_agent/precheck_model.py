@@ -8,6 +8,8 @@
 - 실패·거절·마감 임박이면 AI 항목 없이 `model=None` 으로 돌려준다(D-7·D-8·D-9).
   실행은 규칙 결과만으로 성공으로 닫힌다.
 - 키는 SDK 기본 변수 `ANTHROPIC_API_KEY` 로 이 제어 프로세스만 읽는다(AI #1 D-5).
+- 요청을 실제로 보냈으면(성공·실패·거절 모두) `ModelReview.transfer` 에 무엇이 어디로 나갔는지
+  남긴다. 러너가 이것으로 결과의 레지던시 기록 `processing` 을 채운다(SPEC 9절).
 """
 
 import json
@@ -51,6 +53,13 @@ SUMMARY_CONTROL = "ai-summary"
 SUMMARY_TITLE = "AI 검토 요약"
 
 API_KEY_ENV = "ANTHROPIC_API_KEY"
+
+# 레지던시 기록(echo-was `RunProcessingRequest`). Anthropic API 직접 호출은 리전을 고를 수 없어
+# 리전을 null 로 밝힌다(echo-was 정책: SECRETS 를 안 넘기면 조건부 허용).
+MODEL_PROVIDER = "ANTHROPIC"
+MODEL_REGION: str | None = None
+DATA_CLASS_CONFIG = "CONFIG"
+DATA_CLASS_FINDINGS = "FINDINGS"
 
 # 이름에 이 조각이 들어간 설정 칸은 모델에 보내지 않는다(대소문자·`_`·`-` 무시).
 _SENSITIVE_NAME_PARTS = (
@@ -121,12 +130,34 @@ class AiFinding:
 
 
 @dataclass(frozen=True)
+class ModelTransfer:
+    """모델 API 로 실제로 보낸 요청 한 번(레지던시 기록 재료). 내용은 담지 않고 종류·크기만 둔다.
+
+    - `model`: 요청한 모델 이름(fallback 이 답해도 요청 값. 답한 모델은 `ModelInfo.id`).
+    - `region`: Anthropic 직접 호출은 리전을 고를 수 없어 None.
+    - `data_classes`: 보낸 입력의 자료 종류. 설정·변수 이름·digest·규칙 결과는 CONFIG,
+      최근 보안 점검 결과·규칙 finding 이 있으면 FINDINGS. 변수 값·비밀 이름 칸은 입력에
+      넣지 않으므로(D-3) SECRETS 는 없다.
+    - `request_bytes`: 요청 본문을 JSON(UTF-8)으로 쓴 바이트 수. SDK 가 실제로 쓴 바이트와
+      몇 바이트 다를 수 있는 추정값이다.
+    """
+
+    provider: str
+    model: str
+    region: str | None
+    data_classes: tuple[str, ...]
+    request_bytes: int
+
+
+@dataclass(frozen=True)
 class ModelReview:
     status: ReviewStatus
     model: ModelInfo | None
     findings: tuple[AiFinding, ...]
     # 이벤트 data 로 보낼 값(오류 종류·토큰 수 등). 프롬프트·출력 원문·비밀은 넣지 않는다.
     detail: dict[str, Any] = field(default_factory=dict)
+    # 요청을 보냈으면 채운다(실패·거절이어도). 부르지 않았으면(SKIPPED 등) None.
+    transfer: ModelTransfer | None = None
 
     @property
     def warning_count(self) -> int:
@@ -247,6 +278,28 @@ def render_user_message(model_input: Mapping[str, Any]) -> str:
         "Review this migration precheck input and return warnings for human review.\n"
         f"<precheck_input>\n{data}\n</precheck_input>"
     )
+
+
+def model_data_classes(model_input: Mapping[str, Any]) -> tuple[str, ...]:
+    """보낼 입력의 자료 종류(echo-was `AgentRunDataClass` 이름, 그 순서).
+
+    설정·변수 이름·digest·규칙 차이는 늘 CONFIG 다. 최근 보안 점검 결과나 규칙 finding 이
+    하나라도 들어가면 FINDINGS 를 더한다. 입력은 허용 목록으로 만들어 SECRETS 는 없다(D-3).
+    """
+    rule_results = model_input.get("ruleResults")
+    rule_findings = rule_results.get("findings") if isinstance(rule_results, Mapping) else None
+    if model_input.get("recentFindings") or rule_findings:
+        return (DATA_CLASS_CONFIG, DATA_CLASS_FINDINGS)
+    return (DATA_CLASS_CONFIG,)
+
+
+def request_body_bytes(request: Mapping[str, Any]) -> int:
+    """요청 인자 중 API 본문으로 나가는 칸을 JSON(UTF-8)으로 쓴 바이트 수(추정값).
+
+    `timeout`(클라이언트 설정)·`betas`(헤더)는 본문이 아니라 뺀다.
+    """
+    body = {key: value for key, value in request.items() if key not in ("timeout", "betas")}
+    return len(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
 def is_sensitive_name(name: str) -> bool:
@@ -437,23 +490,41 @@ class PrecheckReviewer:
         *,
         seconds_left: float,
     ) -> ModelReview:
-        """예외를 밖으로 내지 않는다. 결과가 REVIEWED 일 때만 `model` 이 채워진다."""
+        """예외를 밖으로 내지 않는다. 결과가 REVIEWED 일 때만 `model` 이 채워진다.
+
+        요청을 보내려 했으면(응답 실패·거절 포함) `transfer` 를 채운다. 보내기 전에 멈추면 None.
+        """
         timeout = self.timeout_for(seconds_left)
         if timeout is None:
             return ModelReview(ReviewStatus.SKIPPED, None, (), {"reason": "DEADLINE_NEAR"})
         try:
-            user_message = render_user_message(build_model_input(raw_snapshot, snapshot, analysis))
-            response = self._create(**self.request(user_message, timeout))
+            model_input = build_model_input(raw_snapshot, snapshot, analysis)
+            request = self.request(render_user_message(model_input), timeout)
+        except Exception as error:  # noqa: BLE001 — 보내기 전 실패. 나간 자료가 없다
+            return _failed(error)
+        transfer = ModelTransfer(
+            provider=MODEL_PROVIDER,
+            model=self.model,
+            region=MODEL_REGION,
+            data_classes=model_data_classes(model_input),
+            request_bytes=request_body_bytes(request),
+        )
+        try:
+            response = self._create(**request)
         except anthropic.APIStatusError as error:
-            return _failed(error, http_status=error.status_code)
+            return _failed(error, http_status=error.status_code, transfer=transfer)
         except anthropic.APIConnectionError as error:  # 시간 초과 포함
-            return _failed(error)
+            return _failed(error, transfer=transfer)
         except Exception as error:  # noqa: BLE001 — 어떤 실패든 규칙 결과로 닫는다(D-7)
-            return _failed(error)
-        return self._read(response, snapshot, analysis)
+            return _failed(error, transfer=transfer)
+        return self._read(response, snapshot, analysis, transfer)
 
     def _read(
-        self, response: Any, snapshot: PrecheckSnapshot, analysis: PrecheckAnalysis
+        self,
+        response: Any,
+        snapshot: PrecheckSnapshot,
+        analysis: PrecheckAnalysis,
+        transfer: ModelTransfer,
     ) -> ModelReview:
         stop_reason = getattr(response, "stop_reason", None)
         served = getattr(response, "model", None)
@@ -468,10 +539,10 @@ class PrecheckReviewer:
             details = getattr(response, "stop_details", None)
             category = getattr(details, "category", None)
             detail["category"] = category if isinstance(category, str) else None
-            return ModelReview(ReviewStatus.REFUSED, None, (), detail)
+            return ModelReview(ReviewStatus.REFUSED, None, (), detail, transfer)
         if stop_reason != "end_turn":
             detail["reason"] = "STOP_REASON"
-            return ModelReview(ReviewStatus.FAILED, None, (), detail)
+            return ModelReview(ReviewStatus.FAILED, None, (), detail, transfer)
         text = "".join(
             block.text
             for block in getattr(response, "content", None) or []
@@ -486,16 +557,18 @@ class PrecheckReviewer:
             )
         except ValueError as error:  # json.JSONDecodeError 포함
             detail.update(reason="OUTPUT_INVALID", error=type(error).__name__)
-            return ModelReview(ReviewStatus.FAILED, None, (), detail)
+            return ModelReview(ReviewStatus.FAILED, None, (), detail, transfer)
         model = ModelInfo(served_model[:MODEL_ID_LIMIT], self.effort, PROMPT_VERSION)
-        return ModelReview(ReviewStatus.REVIEWED, model, findings, detail)
+        return ModelReview(ReviewStatus.REVIEWED, model, findings, detail, transfer)
 
 
-def _failed(error: Exception, *, http_status: int | None = None) -> ModelReview:
+def _failed(
+    error: Exception, *, http_status: int | None = None, transfer: ModelTransfer | None = None
+) -> ModelReview:
     detail: dict[str, Any] = {"reason": "API_ERROR", "error": type(error).__name__}
     if http_status is not None:
         detail["httpStatus"] = http_status
-    return ModelReview(ReviewStatus.FAILED, None, (), detail)
+    return ModelReview(ReviewStatus.FAILED, None, (), detail, transfer)
 
 
 def _usage(response: Any, name: str) -> int | None:

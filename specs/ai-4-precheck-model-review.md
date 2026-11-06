@@ -116,3 +116,24 @@ PR #14 의 사전 점검 러너가 규칙 비교를 끝낸 뒤 Claude 를 **한 
 | 11/5 15:24 | `systemctl enable --now echo-precheck-runner` | `active`, 재시작 0, `model review: claude-opus-5-5 medium`(비밀 읽기 성공), claim 오류 0 |
 | 11/5 15:2x | 모델 끄기·켜기(환경 파일 + 재시작) | `off` → `claude-opus-5-5 medium`, 마지막 상태 `on`·`active`·`enabled` |
 | 11/5 15:36 | **AC-15:** 형래 님이 화면에서 점검 `86df11bc-3a26-4d69-b935-1b2ad9a74be0` 생성, 사람 조작 없음 | 15:36:46 요청 → 15:36:48 러너가 가져감(입력 불러옴) → 15:37:15 결과 제출(29초). `SUCCEEDED`·`model_review=REVIEWED`·`claude-opus-5-5`, 발견 12·설정 차이 8(화면). 러너 로그와 같음, 재시작 0, 로그 토큰·키 0건. 상시 러너의 모델 호출 1회(D-14) |
+
+## 9. 레지던시 기록 `processing` (11/6 후속)
+
+이슈 #4 댓글(11/5): 형래 님이 "정책 수정(echo-was #80) 배포 뒤 러너에 `processing` 을 넣겠다"고 했고 #80 이 11/5 20:51 배포됐다. 형래 님 응답이 없어 지민이 대신 넣는다(11/6 지민 결정). 계약: echo-was `docs/agent-runner.md` "레지던시 기록 `processing`", `RunProcessingRequest`(`origin/main` `2d99c49`).
+
+| ID | 결정 | 출처 |
+|---|---|---|
+| D-18 | 모델 API 로 **요청을 보냈을 때만** `processing` 을 싣는다. 응답 실패·거절로 `model=null` 이어도, 호출 뒤 마감으로 `FAILED`·`DEADLINE` 이 돼도 싣는다(`externalTransfer: true`). 부르지 않았으면(`--no-model`·마감 임박 SKIPPED·보내기 전 실패) 칸을 뺀다 → WAS 는 "기록 없음"으로 센다 | echo-was `docs/agent-runner.md`("호출했으면 FAILED 여도 true"), 지민 11/6 |
+| D-19 | 값: `location: "gcp/asia-northeast3"`(VM `asia-northeast3-a`) · `sandbox: false`(모델 검토는 작업 공간 컨테이너 밖 제어 프로세스, 결과 `sandbox=null` 과 같음) · `modelProvider: "ANTHROPIC"` · `model` = 요청한 모델(fallback 이 답해도 요청 값, D-10 의 `model.id` 와 따로) · `modelRegion: null`(1P API 는 리전 없음) · `dataClasses` = `CONFIG` + (최근 findings·규칙 finding 이 있으면) `FINDINGS`, **`SECRETS` 없음**(D-3: 변수 값·비밀 이름 칸을 보내지 않음) · `externalTransferBytes` = 요청 본문 JSON(UTF-8) 바이트 추정값 | echo-was #80 조건부 허용(`NO_FORBIDDEN_CLASSES`), 이슈 #4 댓글 |
+| D-20 | WAS 422 대비 재전송은 더하지 않는다. 칸이 선택이고 값이 고정이라 시험·WAS 스키마 검사로 막는다. 모델 이름이 WAS 패턴(`^[A-Za-z0-9._:/@-]{1,64}$`)에 맞지 않으면 결과 전체가 422 가 되지 않게 칸을 뺀다 | AI-default |
+
+| AC | 확인 | 시험 |
+|---|---|---|
+| AC-16 | 모델 검토 성공·실패·거절에서 `processing` 이 위 값으로 실리고 WAS 검사 규칙을 지킨다 | `test_full_run_with_model_fills_model_and_ai_warnings`, `test_runner_model_failure_still_succeeds[*]`, `test_processing_*` |
+| AC-17 | `--no-model`·SKIPPED 는 칸이 없고 예전 결과와 같다 | `test_no_model_run_sends_no_processing`, `test_runner_skips_model_near_deadline`, `test_build_result_without_processing_keeps_the_previous_shape` |
+| AC-18 | 실제 결과 본문이 echo-was `RunResultRequest`(`parse_runner_payload`)를 통과하고 기본 정책에서 `regionlessAllowed=true`·금지 등급 없음 | 로컬 1회(아래), CI 밖 |
+
+| 시각 (KST) | 무엇 | 결과 |
+|---|---|---|
+| 11/6 19:5x | `ruff check`·`ruff format --check`·`mypy`(strict)·`pytest` | 269개 통과, 건너뜀 0(Docker 시험 포함, 새 시험 8개) |
+| 11/6 19:5x | 가짜 WAS·가짜 모델로 낸 결과 4건(성공·시간 초과·거절·`--no-model`)을 echo-was `origin/main` `2d99c49` 의 `parse_runner_payload(…, RunResultRequest)` 로 검사(읽기 전용 worktree) | 4건 통과. 성공 결과를 `is_regionless_allowed`·`sends_forbidden_class`(기본 정책)로 판정 → `True`·`False`(위반 0) |
