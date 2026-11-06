@@ -18,6 +18,12 @@ User=echo-runner
 Group=echo-runner
 EnvironmentFile=/etc/echo-precheck-runner/runner.env
 Environment=CLOUDSDK_CONFIG=/var/lib/echo-precheck-runner/gcloud
+# echo-runner 의 HOME 은 /nonexistent 이고 아래 가두기로 / 가 읽기 전용이다. 쓰는 자리를 상태 폴더로 돌린다.
+# docker CLI 의 BuildKit 은 원격 이미지 인증 때 이 폴더에 .token_seed 를 쓴다(없으면 IMAGE_BUILD_FAILED,
+# "mkdir /nonexistent: read-only file system"). trivy 는 취약점 DB(약 1.6GB)를 여기 받아 둔다.
+# 두 도구가 하위 폴더를 스스로 만든다.
+Environment=DOCKER_CONFIG=/var/lib/echo-precheck-runner/docker
+Environment=TRIVY_CACHE_DIR=/var/lib/echo-precheck-runner/trivy-cache
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONUNBUFFERED=1
 WorkingDirectory=/opt/echo-ai-agent/current

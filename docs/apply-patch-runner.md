@@ -9,6 +9,7 @@
 | WAS S3(claim 종류 확장·반영 결과 받기) 배포 + `PATCH_APPLY_ENABLED=true` | 지금 WAS 는 `APPLY_PATCH` 를 claim 으로 주지 않고 결과도 받지 않는다 | 러너가 켜져 있어도 받을 실행이 없다 |
 | 시나리오 사본 `scenarios/demo-app-0ff0d44/`(#18) | 반영 대상 | `FAILED`·`PATCH_APPLY_FAILED`(`TARGET_MISSING`) |
 | 러너 사용자의 docker 권한 + trivy | 빌드·스캔 없이 PASS 를 만들지 않는다 | `FAILED`·`VERIFY_UNAVAILABLE` |
+| 유닛의 `DOCKER_CONFIG`·`TRIVY_CACHE_DIR` 가 상태 폴더(`/var/lib/echo-precheck-runner`) 아래 | 러너 HOME 이 `/nonexistent`·`ProtectSystem=strict` 라 BuildKit 원격 이미지 인증(토큰 seed)과 trivy DB 받기가 쓸 곳이 없다 | `IMAGE_BUILD_FAILED`(`mkdir /nonexistent: read-only file system`)·`IMAGE_SCAN_FAILED` |
 | GitHub(codeload) 읽기 + 빌드용 레지스트리·PyPI 접근 | 빌드 문맥(echo-demo-app `0ff0d44`)·베이스 이미지·의존성 | `SOURCE_UNAVAILABLE`·`IMAGE_BUILD_FAILED` |
 | (선택) git 체크아웃 | 로컬 커밋 SHA. VM 은 `git archive` 배포라 없다 | `appliedCommitSha: null` |
 
