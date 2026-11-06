@@ -28,6 +28,13 @@ from datetime import UTC, datetime, timedelta
 from types import FrameType
 from typing import Any
 
+from echo_agent.apply_runner import (
+    APPLY_PATCH_KIND,
+    ApplyConfigError,
+    apply_patch_enabled,
+    claim_capabilities,
+    process_apply_run,
+)
 from echo_agent.events import EventLevel, RunEventLog, RunStep
 from echo_agent.precheck_model import (
     PROMPT_VERSION,
@@ -206,6 +213,12 @@ def process_run(
     `reviewer` 가 없으면 규칙 비교만 한다(`--no-model`, PR #14 동작).
     `patcher` 가 없으면 패치 단계를 돌리지 않는다(`--no-patch`).
     """
+    if run.kind == APPLY_PATCH_KIND and APPLY_PATCH_KIND in claim_capabilities():
+        # 반영 실행(스위치 ECHO_APPLY_PATCH=on 일 때만)은 apply_runner 가 맡는다(SPEC ai-5-2).
+        apply_beat = Heartbeat(client, run, interval=heartbeat_interval, log=log)
+        apply_events = _EventSender(client, run, log)
+        outcome = process_apply_run(client, run, apply_beat, apply_events, clock=clock, log=log)
+        return RunOutcome(*outcome)
     heartbeat = Heartbeat(client, run, interval=heartbeat_interval, log=log)
     sender = _EventSender(client, run, log)
     # 첫 하트비트가 CLAIMED → RUNNING 을 만든다(echo-was AD-2).
@@ -399,7 +412,7 @@ def run_loop(
     """가져갈 실행이 생길 때마다 처리한다. `--once` 면 한 번 가져가 보고 끝낸다."""
     while not stop.is_set():
         try:
-            run = client.claim(runner_name)
+            run = client.claim(runner_name, claim_capabilities())
         except (WasError, OSError) as error:
             log(f"claim failed: {type(error).__name__} {error}")
             if once:
@@ -456,6 +469,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         client = WasClient.from_env()
     except WasConfigError as error:
+        _stderr(f"config error: {error}")
+        return 2
+    try:
+        _stderr(f"apply patch: {'on' if apply_patch_enabled() else 'off'}")
+    except ApplyConfigError as error:
         _stderr(f"config error: {error}")
         return 2
     reviewer = None

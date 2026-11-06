@@ -17,6 +17,7 @@ src/echo_agent/
 ├─ was_client.py       # WAS 러너 API 클라이언트(claim·heartbeat·events·result), 표준 라이브러리만
 ├─ precheck_rules.py   # 사전 점검 규칙 비교(순수 함수): 설정 차이 → configDiff·경고·조치 안내
 ├─ precheck_model.py   # 사전 점검 모델 검토: Claude 한 번(구조화 출력) → AI WARN·model 칸
+├─ apply_runner.py     # 반영 실행(APPLY_PATCH): 승인된 패치 적용·빌드·Trivy·healthz → 결과(스위치 기본 꺼짐)
 └─ precheck_runner.py  # 사전 점검 러너 루프(규칙 비교 → 모델 검토 → 결과 제출)
 deploy/
 ├─ echo-precheck-runner.service  # 샌드박스 VM systemd 유닛(전용 사용자·쓰기 금지·죽으면 다시 뜸)
@@ -190,6 +191,19 @@ sudo ln -sfn /opt/echo-ai-agent/releases/<이전 sha> /opt/echo-ai-agent/current
 
 - VM 을 멈추면(인프라 `vm_running = false`) 러너도 멈춘다. 다시 켜면 서비스가 자동으로 뜬다.
 - 설정 오류(환경 변수·키 없음, 종료 코드 2)면 다시 띄우지 않는다. 그 밖에 죽으면 10초 뒤 다시 뜨고, 5분에 5번을 넘기면 멈춘다(`systemctl status` 로 확인).
+
+## 승인된 패치 반영 (APPLY_PATCH, 기본 꺼짐)
+
+사람이 승인한 패치(WAS `PATCH_APPLY_ENABLED` 가 켜져 있을 때 생기는 `APPLY_PATCH` 실행)를 샌드박스에서 시나리오 사본에 적용하고, 이미지를 빌드해 Trivy(C-IMG-1 기준: 수정 가능한 HIGH·CRITICAL 0)로 보고, 앱을 `--network none` 으로 띄워 `/healthz` 를 본 뒤 결과 `{status, failureCode, simulated, appliedCommitSha, branch}` 를 낸다. **브랜치·이미지를 push 하지 않는다**(샌드박스는 읽기 자격만). 설계·실패 코드·계약 보완 목록: SPEC [`ai-5-2`](specs/ai-5-2-apply-patch-runner.md), 운영 안내 [`docs/apply-patch-runner.md`](docs/apply-patch-runner.md).
+
+- 스위치 `ECHO_APPLY_PATCH=on|off`(기본 off). 꺼져 있으면 claim 이 지금과 같은 `["PRECHECK"]` 이다. 오타면 종료 코드 2. 시작 로그 `apply patch: on|off`.
+- docker·trivy 가 없으면 PASS 를 만들지 않고 `FAILED`·`VERIFY_UNAVAILABLE` 로 낸다. 지금 VM 은 러너 사용자에게 docker 권한이 없고 trivy·git 이 없어 켜지 않는다(켜는 절차는 SPEC 10절, 인프라 승인 필요).
+- 로컬 확인(가짜 WAS·시나리오 사본이 있는 체크아웃 필요):
+
+  ```bash
+  ECHO_WAS_URL=http://localhost:<port> ECHO_RUNNER_TOKEN=echo_rnr_… ECHO_APPLY_PATCH=on \
+    ECHO_APPLY_REPO_ROOT=<scenarios/ 가 있는 체크아웃> uv run python -m echo_agent.precheck_runner --once --no-model
+  ```
 
 ## 지키는 것
 
