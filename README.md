@@ -206,6 +206,13 @@ sudo ln -sfn /opt/echo-ai-agent/releases/<이전 sha> /opt/echo-ai-agent/current
     ECHO_APPLY_REPO_ROOT=<scenarios/ 가 있는 체크아웃> uv run python -m echo_agent.precheck_runner --once --no-model
   ```
 
+## 저장소 이전 위험 분석 (#23)
+
+고정 커밋의 Python 소스를 실행하지 않고 리전·클라우드 SDK·비밀값 패턴·로컬 상태를 관측합니다. 선택적으로 Claude가 마스킹된 파일·줄 근거를 읽고 한국어 추정·권고를 더합니다. 기본은 꺼져 있으며 WAS의 고객 저장소/커밋 입력 연결 뒤 PRECHECK에 추가할 수 있습니다.
+
+- [CLI·합성 시연 사용법](docs/repository-analysis.md)
+- [범위·입력 제안·검증 기록](specs/ai-23-repository-analysis.md)
+
 ## 지키는 것
 
 - 모델이 고른 명령은 작업 공간 컨테이너 안 `sh -c`에서만 돈다. 호스트는 셸을 거치지 않는다.

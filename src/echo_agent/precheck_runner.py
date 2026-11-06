@@ -55,6 +55,8 @@ from echo_agent.precheck_rules import (
     analyze,
     parse_snapshot,
 )
+from echo_agent.repo_model import RepoReviewer
+from echo_agent.repo_precheck import RepoPrecheck, merge_result
 from echo_agent.was_client import (
     ClaimedRun,
     ResultAlreadySubmittedError,
@@ -244,6 +246,7 @@ def process_run(
     log: Logger = _stderr,
     reviewer: PrecheckReviewer | None = None,
     patcher: RulePatcher | None = None,
+    repo_analyzer: RepoPrecheck | None = None,
 ) -> RunOutcome:
     """가져간 실행 하나를 끝까지 처리한다. 예외를 밖으로 내지 않는다.
 
@@ -269,6 +272,23 @@ def process_run(
         if analysis is not None and reviewer is not None and not heartbeat.lost.is_set():
             # 모델 호출이 길어도 하트비트 스레드가 임대를 늘린다.
             review = _review_with_events(run, analysis, reviewer, sender, clock)
+        repo_result = None
+        if analysis is not None and repo_analyzer is not None and not heartbeat.lost.is_set():
+            sender.events.add(RunStep.ANALYZE, "repository analysis started")
+            sender.flush()
+            repo_result = repo_analyzer.run(
+                run.input_snapshot,
+                seconds=(run.deadline_at - DEADLINE_MARGIN - clock()).total_seconds(),
+            )
+            sender.events.add(
+                RunStep.ANALYZE,
+                "repository analysis finished",
+                EventLevel.WARN,
+                status=repo_result["status"],
+                observations=repo_result["observationCount"],
+                modelReviewStatus=repo_result.get("modelReviewStatus", "NOT_REQUESTED"),
+            )
+            sender.flush()
         patches: list[dict[str, Any]] = []
         if analysis is not None and patcher is not None and not heartbeat.lost.is_set():
             # docker 검사가 길어도 하트비트 스레드가 임대를 늘린다.
@@ -292,6 +312,8 @@ def process_run(
             patches=patches,
             processing=processing,
         )
+        if repo_result is not None:
+            merge_result(result, repo_result)
         stored = _submit_or_resend_without_patches(client, run, result, sender)
         return RunOutcome(
             run.id, stored or status, failure_code, submitted=True, review=review_status
@@ -452,6 +474,7 @@ def run_loop(
     log: Logger = _stderr,
     reviewer: PrecheckReviewer | None = None,
     patcher: RulePatcher | None = None,
+    repo_analyzer: RepoPrecheck | None = None,
 ) -> int:
     """가져갈 실행이 생길 때마다 처리한다. `--once` 면 한 번 가져가 보고 끝낸다."""
     while not stop.is_set():
@@ -470,7 +493,9 @@ def run_loop(
             stop.wait(idle_seconds)
             continue
         log(f"claimed run={run.id} kind={run.kind} deadline={run.deadline_at.isoformat()}")
-        outcome = process_run(client, run, log=log, reviewer=reviewer, patcher=patcher)
+        outcome = process_run(
+            client, run, log=log, reviewer=reviewer, patcher=patcher, repo_analyzer=repo_analyzer
+        )
         log(
             f"finished run={outcome.run_id} status={outcome.status} "
             f"failure={outcome.failure_code} submitted={outcome.submitted} "
@@ -509,6 +534,11 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("ECHO_RUNNER_NAME", DEFAULT_RUNNER_NAME),
         help="러너 토큰을 발급할 때 쓴 이름(WAS 가 토큰 이름과 대조)",
     )
+    parser.add_argument(
+        "--repo-analysis",
+        action="store_true",
+        help="고정 커밋 저장소 분석을 더한다(기본 off, repository 입력 필요)",
+    )
     args = parser.parse_args(argv)
     try:
         client = WasClient.from_env()
@@ -530,6 +560,14 @@ def main(argv: list[str] | None = None) -> int:
     _stderr(f"model review: {reviewer.model + ' ' + reviewer.effort if reviewer else 'off'}")
     patcher = RulePatcher() if args.patch else None
     _stderr(f"rule patch: {'on' if patcher else 'off'}")
+    repo_analyzer = (
+        RepoPrecheck(
+            None if args.no_model else RepoReviewer.from_env(), location=PROCESSING_LOCATION
+        )
+        if args.repo_analysis
+        else None
+    )
+    _stderr(f"repository analysis: {'on' if repo_analyzer else 'off'}")
 
     stop = threading.Event()
 
@@ -539,7 +577,13 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
     return run_loop(
-        client, args.runner_name, once=args.once, stop=stop, reviewer=reviewer, patcher=patcher
+        client,
+        args.runner_name,
+        once=args.once,
+        stop=stop,
+        reviewer=reviewer,
+        patcher=patcher,
+        repo_analyzer=repo_analyzer,
     )
 
 
