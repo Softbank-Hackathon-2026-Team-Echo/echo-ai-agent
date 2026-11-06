@@ -189,6 +189,7 @@ cat /opt/echo-ai-agent/current/.deployed-rev   # 지금 도는 버전
 sudo ln -sfn /opt/echo-ai-agent/releases/<이전 sha> /opt/echo-ai-agent/current && sudo systemctl restart echo-precheck-runner
 ```
 
+- 유닛 파일(`deploy/echo-precheck-runner.service`)이 바뀐 버전은 위 `install` + `daemon-reload` 줄을 꼭 거친 뒤 다시 시작한다. 링크만 바꾸고 재시작하면 옛 유닛 설정으로 돈다(`systemctl show echo-precheck-runner -p Environment` 로 확인).
 - VM 을 멈추면(인프라 `vm_running = false`) 러너도 멈춘다. 다시 켜면 서비스가 자동으로 뜬다.
 - 설정 오류(환경 변수·키 없음, 종료 코드 2)면 다시 띄우지 않는다. 그 밖에 죽으면 10초 뒤 다시 뜨고, 5분에 5번을 넘기면 멈춘다(`systemctl status` 로 확인).
 
