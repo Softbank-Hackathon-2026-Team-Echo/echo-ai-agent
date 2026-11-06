@@ -1,0 +1,16 @@
+{
+  "analysisStatus": "diagnosed",
+  "summary": "counter 선언의 등호 뒤에 값이 없어 JavaScript 문법 검사가 실패했습니다.",
+  "evidenceIds": ["EV000001"],
+  "sourceEvidenceIds": ["SC000005"],
+  "canFix": true,
+  "reason": "초기 counter 값을 0으로 지정합니다. 문법 검사는 화면 동작 검증을 대신하지 않습니다.",
+  "limitations": ["합성 fixture의 모델 응답 재생이며 실제 모델의 진단 품질을 검증하지 않습니다."],
+  "edits": [{
+    "path": "app/static/index.html",
+    "oldText": "const counter = ;",
+    "newText": "const counter = 0;",
+    "evidenceIds": ["EV000001"],
+    "sourceEvidenceIds": ["SC000005"]
+  }]
+}

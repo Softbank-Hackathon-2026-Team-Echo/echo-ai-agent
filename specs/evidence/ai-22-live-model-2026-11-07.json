@@ -1,0 +1,338 @@
+{
+  "scope": "Real Claude request and local Docker JavaScript syntax repair; synthetic fault in copied demo source; no production deployment",
+  "summary": {
+    "at": "2026-11-06T16:16:48.657579+00:00",
+    "baseCommit": "d856a1d13f19aa219ebba117c29561f838da9fe4",
+    "syntheticFailedCommit": "6c9f54e9f68d6a8691baf66577d70117f3cda7a8",
+    "realModelCalls": 1,
+    "status": "SUCCEEDED",
+    "failureCode": null,
+    "model": {
+      "id": "claude-opus-5-5",
+      "effort": "medium",
+      "promptVersion": "diagnosis-v1",
+      "refusal": false
+    },
+    "patchCount": 1,
+    "verification": {
+      "before": {
+        "available": true,
+        "passed": false,
+        "toolVersion": "v24.22.2",
+        "issues": [
+          {
+            "path": "app/static/index.html",
+            "line": 160,
+            "message": "Unexpected token '{'"
+          }
+        ],
+        "reason": null
+      },
+      "after": {
+        "available": true,
+        "passed": true,
+        "toolVersion": "v24.22.2",
+        "issues": [],
+        "reason": null
+      }
+    },
+    "durationSeconds": 9.286,
+    "simulatedInput": true,
+    "modelResponseMocked": false,
+    "sandboxLocation": "local Docker Desktop",
+    "productionChanged": false,
+    "fullAppRuntimeChecked": false,
+    "fixedEqualsBaseline": true,
+    "patchHashMatches": true,
+    "ourContainersRemaining": []
+  },
+  "modelCalls": [
+    {
+      "requestedModel": "claude-opus-5-5",
+      "at": "2026-11-06T16:16:40.284889+00:00",
+      "requestId": "req_011CgmyUnitFPw4wXTh3c3TZ",
+      "responseId": "msg_011CgmyUoaisQmGQPfpMXFYq",
+      "servedModel": "claude-opus-5-5",
+      "stopReason": "end_turn",
+      "inputTokens": 20872,
+      "outputTokens": 468,
+      "durationSeconds": 7.448
+    }
+  ],
+  "sandboxObservations": [
+    {
+      "name": "echo-ws-syntax-0c8a1d79695f",
+      "image": "node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9",
+      "networkMode": "none",
+      "readOnlyRoot": true,
+      "user": "65532:65532",
+      "capDrop": [
+        "ALL"
+      ],
+      "securityOpt": [
+        "no-new-privileges"
+      ],
+      "memory": 536870912,
+      "nanoCpus": 1000000000,
+      "pidsLimit": 128,
+      "bindMounts": null,
+      "environmentKeys": [
+        "HOME",
+        "PATH",
+        "NODE_VERSION",
+        "YARN_VERSION"
+      ]
+    },
+    {
+      "name": "echo-ws-syntax-1a7e6175bf48",
+      "image": "node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9",
+      "networkMode": "none",
+      "readOnlyRoot": true,
+      "user": "65532:65532",
+      "capDrop": [
+        "ALL"
+      ],
+      "securityOpt": [
+        "no-new-privileges"
+      ],
+      "memory": 536870912,
+      "nanoCpus": 1000000000,
+      "pidsLimit": 128,
+      "bindMounts": null,
+      "environmentKeys": [
+        "HOME",
+        "PATH",
+        "NODE_VERSION",
+        "YARN_VERSION"
+      ]
+    },
+    {
+      "name": "echo-ws-syntax-312bee838e10",
+      "image": "node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9",
+      "networkMode": "none",
+      "readOnlyRoot": true,
+      "user": "65532:65532",
+      "capDrop": [
+        "ALL"
+      ],
+      "securityOpt": [
+        "no-new-privileges"
+      ],
+      "memory": 536870912,
+      "nanoCpus": 1000000000,
+      "pidsLimit": 128,
+      "bindMounts": null,
+      "environmentKeys": [
+        "HOME",
+        "PATH",
+        "NODE_VERSION",
+        "YARN_VERSION"
+      ]
+    },
+    {
+      "name": "echo-ws-syntax-e0201855e241",
+      "image": "node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9",
+      "networkMode": "none",
+      "readOnlyRoot": true,
+      "user": "65532:65532",
+      "capDrop": [
+        "ALL"
+      ],
+      "securityOpt": [
+        "no-new-privileges"
+      ],
+      "memory": 536870912,
+      "nanoCpus": 1000000000,
+      "pidsLimit": 128,
+      "bindMounts": null,
+      "environmentKeys": [
+        "HOME",
+        "PATH",
+        "NODE_VERSION",
+        "YARN_VERSION"
+      ]
+    }
+  ],
+  "events": [
+    {
+      "seq": 1,
+      "at": "2026-11-06T16:16:39.378535Z",
+      "step": "INPUT_LOAD",
+      "level": "INFO",
+      "message": "diagnosis input prepared",
+      "data": {
+        "logs": 1,
+        "sourceAvailable": true
+      }
+    },
+    {
+      "seq": 2,
+      "at": "2026-11-06T16:16:39.378989Z",
+      "step": "SANDBOX_CREATE",
+      "level": "INFO",
+      "message": "checking original JavaScript syntax",
+      "data": {}
+    },
+    {
+      "seq": 3,
+      "at": "2026-11-06T16:16:40.283226Z",
+      "step": "SANDBOX_DELETE",
+      "level": "INFO",
+      "message": "original syntax checker finished",
+      "data": {
+        "available": true,
+        "passed": false
+      }
+    },
+    {
+      "seq": 4,
+      "at": "2026-11-06T16:16:40.283476Z",
+      "step": "ANALYZE",
+      "level": "INFO",
+      "message": "diagnosis model request",
+      "data": {
+        "attempt": 1
+      }
+    },
+    {
+      "seq": 5,
+      "at": "2026-11-06T16:16:47.739765Z",
+      "step": "PATCH_PROPOSE",
+      "level": "INFO",
+      "message": "diagnosis edit drafted; syntax verification pending",
+      "data": {
+        "attempt": 1
+      }
+    },
+    {
+      "seq": 6,
+      "at": "2026-11-06T16:16:48.655675Z",
+      "step": "PATCH_VERIFY",
+      "level": "INFO",
+      "message": "candidate syntax checker finished",
+      "data": {
+        "attempt": 1,
+        "available": true,
+        "passed": true
+      }
+    }
+  ],
+  "processing": {
+    "location": "local/development",
+    "sandbox": false,
+    "modelProvider": "ANTHROPIC",
+    "model": "claude-opus-5-5",
+    "modelRegion": null,
+    "dataClasses": [
+      "LOGS",
+      "SOURCE_CODE"
+    ],
+    "externalTransfer": true,
+    "externalTransferBytes": 52387
+  },
+  "diagnosis": {
+    "analysisStatus": "diagnosed",
+    "summary": "The inline script fails a syntax check at app/static/index.html line 160. The parameter list of fetchJson is missing its closing parenthesis: `async function fetchJson(url, options, timeoutMs {`. The parser therefore hits an unexpected '{'. Adding the missing ')' restores the intended function signature.",
+    "evidenceIds": [
+      "EV000001",
+      "EV000002"
+    ],
+    "sourceEvidenceIds": [
+      "SC000160"
+    ],
+    "canFix": true,
+    "reason": "Both validation logs report \"SyntaxError: Unexpected token '{'\" at index.html:160. Source line 160 shows the parameter list was never closed before the function body brace. The function's callers (lines 190, 229, 249) pass three arguments, which matches the intended signature (url, options, timeoutMs).",
+    "limitations": [
+      "Source commit/content association is supplied by WAS, not independently verified.",
+      "A passing syntax check would not prove runtime behavior or deployment success.",
+      "Other syntax errors after line 160 may only become visible once this one is fixed.",
+      "Only JavaScript syntax is checked here; build, Trivy, health and browser behavior are not verified."
+    ],
+    "inputBinding": {
+      "deployRequestId": "local-live-model-syntax-smoke",
+      "sourceCommit": "6c9f54e9f68d6a8691baf66577d70117f3cda7a8",
+      "sourceSha256": "aaf0f14edf0ff05d13ea19d5e694a785dbded5e51b05c27b15b96f74eb023542",
+      "commitVerification": "caller_supplied"
+    },
+    "evidence": [
+      {
+        "id": "EV000001",
+        "chunkId": "real-local-syntax-check",
+        "stage": "validation",
+        "chunkLine": 1,
+        "sourceLine": null,
+        "text": "app/static/index.html:160: SyntaxError: Unexpected token '{'"
+      },
+      {
+        "id": "EV000002",
+        "chunkId": "syntax-before",
+        "stage": "validation",
+        "chunkLine": 1,
+        "sourceLine": null,
+        "text": "app/static/index.html:160: SyntaxError: Unexpected token '{'"
+      }
+    ],
+    "sourceEvidence": [
+      {
+        "id": "SC000160",
+        "path": "app/static/index.html",
+        "line": 160,
+        "text": "  async function fetchJson(url, options, timeoutMs {"
+      }
+    ],
+    "verification": {
+      "before": {
+        "available": true,
+        "passed": false,
+        "toolVersion": "v24.22.2",
+        "issues": [
+          {
+            "path": "app/static/index.html",
+            "line": 160,
+            "message": "Unexpected token '{'"
+          }
+        ],
+        "reason": null
+      },
+      "after": {
+        "available": true,
+        "passed": true,
+        "toolVersion": "v24.22.2",
+        "issues": [],
+        "reason": null
+      }
+    }
+  },
+  "patches": [
+    {
+      "id": "diagnosis-8bb28f6af3329715",
+      "patchHash": "sha256:8bb28f6af3329715ace21d7f9454b136285b41057324db26c6a4f72547db626c",
+      "files": [
+        "app/static/index.html"
+      ],
+      "diff": "--- a/app/static/index.html\n+++ b/app/static/index.html\n@@ -157,7 +157,7 @@\n     strip: [],\n   };\n \n-  async function fetchJson(url, options, timeoutMs {\n+  async function fetchJson(url, options, timeoutMs) {\n     const ctrl = new AbortController();\n     const timer = setTimeout(() => ctrl.abort(), timeoutMs);\n     try {\n",
+      "reason": "Both validation logs report \"SyntaxError: Unexpected token '{'\" at index.html:160. Source line 160 shows the parameter list was never closed before the function body brace. The function's callers (lines 190, 229, 249) pass three arguments, which matches the intended signature (url, options, timeoutMs).",
+      "touchesProtectedFiles": false,
+      "origin": "AI",
+      "checks": [
+        {
+          "name": "DIFF_APPLIES",
+          "result": "PASS",
+          "summary": "Exact original source replacements verified."
+        },
+        {
+          "name": "POLICY",
+          "result": "PASS",
+          "policyVersion": "diagnosis-v1",
+          "summary": "Only existing inline JavaScript changed."
+        },
+        {
+          "name": "JAVASCRIPT_SYNTAX",
+          "result": "PASS",
+          "toolVersion": "v24.22.2",
+          "summary": "Original failed; candidate passed the same parse-only check."
+        }
+      ]
+    }
+  ]
+}

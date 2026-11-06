@@ -38,5 +38,8 @@ jobs:
       - name: mypy
         run: uv run mypy
 
+      - name: 진단 문법 검사 이미지
+        run: docker pull node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9
+
       - name: pytest
         run: uv run pytest

@@ -37,6 +37,21 @@ case "${ECHO_PRECHECK_PATCH:-off}" in
     ;;
 esac
 
+case "${ECHO_DIAGNOSIS:-off}" in
+  on)
+    if [ "$use_model" != 1 ]; then
+      echo "ECHO_DIAGNOSIS requires ECHO_PRECHECK_MODEL=on" >&2
+      exit 2
+    fi
+    args+=(--diagnose)
+    ;;
+  off) ;;
+  *)
+    echo "ECHO_DIAGNOSIS must be on or off" >&2
+    exit 2
+    ;;
+esac
+
 read_secret() {
   gcloud secrets versions access latest --secret="$1" --project="$ECHO_GCP_PROJECT" --quiet
 }

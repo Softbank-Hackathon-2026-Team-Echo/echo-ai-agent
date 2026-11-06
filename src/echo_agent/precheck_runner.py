@@ -38,6 +38,9 @@ from echo_agent.apply_runner import (
     claim_capabilities,
     process_apply_run,
 )
+from echo_agent.diagnosis import DiagnosisService
+from echo_agent.diagnosis_model import DiagnosisModel
+from echo_agent.diagnosis_runner import DIAGNOSIS_KIND, process_diagnosis_run
 from echo_agent.events import EventLevel, RunEventLog, RunStep
 from echo_agent.precheck_model import (
     PROMPT_VERSION,
@@ -244,12 +247,18 @@ def process_run(
     log: Logger = _stderr,
     reviewer: PrecheckReviewer | None = None,
     patcher: RulePatcher | None = None,
+    diagnoser: DiagnosisService | None = None,
 ) -> RunOutcome:
     """가져간 실행 하나를 끝까지 처리한다. 예외를 밖으로 내지 않는다.
 
     `reviewer` 가 없으면 규칙 비교만 한다(`--no-model`, PR #14 동작).
     `patcher` 가 없으면 패치 단계를 돌리지 않는다(`--no-patch`).
     """
+    if run.kind == DIAGNOSIS_KIND and diagnoser is not None:
+        beat = Heartbeat(client, run, interval=heartbeat_interval, log=log)
+        sender = _EventSender(client, run, log)
+        outcome = process_diagnosis_run(client, run, diagnoser, beat, sender, clock)
+        return RunOutcome(*outcome)
     if run.kind == APPLY_PATCH_KIND and APPLY_PATCH_KIND in claim_capabilities():
         # 반영 실행(스위치 ECHO_APPLY_PATCH=on 일 때만)은 apply_runner 가 맡는다(SPEC ai-5-2).
         apply_beat = Heartbeat(client, run, interval=heartbeat_interval, log=log)
@@ -452,11 +461,15 @@ def run_loop(
     log: Logger = _stderr,
     reviewer: PrecheckReviewer | None = None,
     patcher: RulePatcher | None = None,
+    diagnoser: DiagnosisService | None = None,
 ) -> int:
     """가져갈 실행이 생길 때마다 처리한다. `--once` 면 한 번 가져가 보고 끝낸다."""
     while not stop.is_set():
         try:
-            run = client.claim(runner_name, claim_capabilities())
+            capabilities = claim_capabilities()
+            if diagnoser is not None:
+                capabilities = (*capabilities, DIAGNOSIS_KIND)
+            run = client.claim(runner_name, capabilities)
         except (WasError, OSError) as error:
             log(f"claim failed: {type(error).__name__} {error}")
             if once:
@@ -470,7 +483,9 @@ def run_loop(
             stop.wait(idle_seconds)
             continue
         log(f"claimed run={run.id} kind={run.kind} deadline={run.deadline_at.isoformat()}")
-        outcome = process_run(client, run, log=log, reviewer=reviewer, patcher=patcher)
+        outcome = process_run(
+            client, run, log=log, reviewer=reviewer, patcher=patcher, diagnoser=diagnoser
+        )
         log(
             f"finished run={outcome.run_id} status={outcome.status} "
             f"failure={outcome.failure_code} submitted={outcome.submitted} "
@@ -509,7 +524,15 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("ECHO_RUNNER_NAME", DEFAULT_RUNNER_NAME),
         help="러너 토큰을 발급할 때 쓴 이름(WAS 가 토큰 이름과 대조)",
     )
+    parser.add_argument(
+        "--diagnose",
+        action="store_true",
+        help="협의된 CHANGE_PROPOSAL 진단 계약을 켠다(기본 off, WAS 배포 뒤에만)",
+    )
     args = parser.parse_args(argv)
+    if args.diagnose and args.no_model:
+        _stderr("config error: --diagnose cannot be combined with --no-model")
+        return 2
     try:
         client = WasClient.from_env()
     except WasConfigError as error:
@@ -530,6 +553,11 @@ def main(argv: list[str] | None = None) -> int:
     _stderr(f"model review: {reviewer.model + ' ' + reviewer.effort if reviewer else 'off'}")
     patcher = RulePatcher() if args.patch else None
     _stderr(f"rule patch: {'on' if patcher else 'off'}")
+    diagnoser = (
+        DiagnosisService(DiagnosisModel.from_env(), location=PROCESSING_LOCATION)
+        if args.diagnose
+        else None
+    )
 
     stop = threading.Event()
 
@@ -539,7 +567,13 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
     return run_loop(
-        client, args.runner_name, once=args.once, stop=stop, reviewer=reviewer, patcher=patcher
+        client,
+        args.runner_name,
+        once=args.once,
+        stop=stop,
+        reviewer=reviewer,
+        patcher=patcher,
+        diagnoser=diagnoser,
     )
 
 

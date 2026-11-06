@@ -206,7 +206,15 @@ sudo ln -sfn /opt/echo-ai-agent/releases/<이전 sha> /opt/echo-ai-agent/current
     ECHO_APPLY_REPO_ROOT=<scenarios/ 가 있는 체크아웃> uv run python -m echo_agent.precheck_runner --once --no-model
   ```
 
-## 지키는 것
+## 오류 진단·수정 앞단 (#22, 기본 꺼짐)
+
+실패 로그와 고정 소스에서 근거 있는 진단·실제 diff를 만들고, 기존 DockerSandbox의 Node 문법 검사로 원본 실패/수정본 통과를 확인한다. v1은 `app/static/index.html`의 inline JavaScript만 대상으로 한다. 계약·CLI·fixture·통합 조건: [오류 진단 SPEC](specs/ai-22-error-diagnosis.md).
+
+`ECHO_DIAGNOSIS=off`가 기본이다. WAS의 `CHANGE_PROPOSAL`·`diagnosis` 계약과 후단 시연 대상 연결이 확인되기 전에는 켜지 않는다. 기존 `PRECHECK` 결과/보안 증거와 구분한다. 로컬 `diagnosis_cli`는 WAS에 쓰지 않고 JSON 결과만 출력한다. 모델 응답 재생 옵션은 항상 `simulated=true`다.
+
+한 명령으로 오류 주입·진단·diff·Docker 검사를 재현하는 절차는 [오류 수정 시연 안내](docs/error-diagnosis-demo.md)를 따른다. 기본은 API 없는 재생이며 `--live`로 실제 Claude 호출을 명시한다. 한국어 설명과 API 인증·권한·한도·시간 초과별 실패 코드를 제공한다.
+
+## 공통 실행 원칙
 
 - 모델이 고른 명령은 작업 공간 컨테이너 안 `sh -c`에서만 돈다. 호스트는 셸을 거치지 않는다.
 - 작업 공간에는 네트워크·키·토큰·볼륨·Docker 소켓이 없다.

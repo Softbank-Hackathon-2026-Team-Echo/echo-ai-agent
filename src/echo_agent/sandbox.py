@@ -243,8 +243,9 @@ class DockerSandbox:
                     _read_limited(process.stdout, limit), _read_limited(process.stderr, limit)
                 )
                 code = await process.wait()
-        except TimeoutError:
-            process.kill()
+        except (TimeoutError, asyncio.CancelledError):
+            if process.returncode is None:
+                process.kill()
             await process.wait()
             raise
         return code, stdout, stderr

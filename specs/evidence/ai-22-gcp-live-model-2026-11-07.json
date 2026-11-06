@@ -1,0 +1,375 @@
+{
+  "scope": "Real Claude call from GCP sandbox VM; isolated Docker syntax check on synthetic demo-app copy; no WAS submission or production rollout",
+  "inputBaseCommit": "d856a1d13f19aa219ebba117c29561f838da9fe4",
+  "uploadedCodeArchiveSha256": "c753d5af59b63f0c36030e04ab4a5ebc2b63095706ce2fa5cfe28d0e9779422d",
+  "controller": {
+    "project": "team-echo-final",
+    "instance": "echo-sandbox-runner",
+    "zone": "asia-northeast3-a",
+    "user": "echo-runner"
+  },
+  "summary": {
+    "at": "2026-11-06T16:32:23.546536+00:00",
+    "mode": "live",
+    "location": "gcp/asia-northeast3",
+    "sourceCommit": "60e654509ebef785007a408cb1741561c54a8d46",
+    "baselineSha256": "19795e66ff036eccb6fcd65216045af4ef4fd08bce919ed40b8efd8d3d9cb890",
+    "realModelCalls": 1,
+    "model": {
+      "id": "claude-opus-5-5",
+      "effort": "medium",
+      "promptVersion": "diagnosis-v1.1",
+      "refusal": false
+    },
+    "status": "SUCCEEDED",
+    "failureCode": null,
+    "patchCount": 1,
+    "fixedEqualsBaseline": true,
+    "verification": {
+      "before": {
+        "available": true,
+        "passed": false,
+        "toolVersion": "v24.22.2",
+        "issues": [
+          {
+            "path": "app/static/index.html",
+            "line": 160,
+            "message": "Unexpected token '{'"
+          }
+        ],
+        "reason": null
+      },
+      "after": {
+        "available": true,
+        "passed": true,
+        "toolVersion": "v24.22.2",
+        "issues": [],
+        "reason": null
+      }
+    },
+    "durationSeconds": 10.013,
+    "ourContainersRemaining": [],
+    "syntheticInput": true,
+    "fullAppRuntimeChecked": false,
+    "productionChanged": false,
+    "passed": true
+  },
+  "modelCalls": [
+    {
+      "at": "2026-11-06T16:32:14.367105+00:00",
+      "mocked": false,
+      "model": "claude-opus-5-5",
+      "requestId": "req_011Cgmzfeh7QbqUbNBUPJMrN",
+      "inputTokens": 20954,
+      "outputTokens": 605,
+      "durationSeconds": 8.213
+    }
+  ],
+  "sandboxObservations": [
+    {
+      "name": "echo-ws-syntax-31dace90200c",
+      "image": "node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9",
+      "networkMode": "none",
+      "readOnlyRoot": true,
+      "user": "65532:65532",
+      "capDrop": [
+        "ALL"
+      ],
+      "securityOpt": [
+        "no-new-privileges"
+      ],
+      "memory": 536870912,
+      "nanoCpus": 1000000000,
+      "pidsLimit": 128,
+      "bindMounts": null,
+      "environmentKeys": [
+        "HOME",
+        "PATH",
+        "NODE_VERSION",
+        "YARN_VERSION"
+      ]
+    },
+    {
+      "name": "echo-ws-syntax-62b4a77ce044",
+      "image": "node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9",
+      "networkMode": "none",
+      "readOnlyRoot": true,
+      "user": "65532:65532",
+      "capDrop": [
+        "ALL"
+      ],
+      "securityOpt": [
+        "no-new-privileges"
+      ],
+      "memory": 536870912,
+      "nanoCpus": 1000000000,
+      "pidsLimit": 128,
+      "bindMounts": null,
+      "environmentKeys": [
+        "HOME",
+        "PATH",
+        "NODE_VERSION",
+        "YARN_VERSION"
+      ]
+    },
+    {
+      "name": "echo-ws-syntax-4faeb28e7e16",
+      "image": "node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9",
+      "networkMode": "none",
+      "readOnlyRoot": true,
+      "user": "65532:65532",
+      "capDrop": [
+        "ALL"
+      ],
+      "securityOpt": [
+        "no-new-privileges"
+      ],
+      "memory": 536870912,
+      "nanoCpus": 1000000000,
+      "pidsLimit": 128,
+      "bindMounts": null,
+      "environmentKeys": [
+        "HOME",
+        "PATH",
+        "NODE_VERSION",
+        "YARN_VERSION"
+      ]
+    },
+    {
+      "name": "echo-ws-syntax-6b898bdabd49",
+      "image": "node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9",
+      "networkMode": "none",
+      "readOnlyRoot": true,
+      "user": "65532:65532",
+      "capDrop": [
+        "ALL"
+      ],
+      "securityOpt": [
+        "no-new-privileges"
+      ],
+      "memory": 536870912,
+      "nanoCpus": 1000000000,
+      "pidsLimit": 128,
+      "bindMounts": null,
+      "environmentKeys": [
+        "HOME",
+        "PATH",
+        "NODE_VERSION",
+        "YARN_VERSION"
+      ]
+    }
+  ],
+  "events": [
+    {
+      "seq": 1,
+      "at": "2026-11-06T16:32:13.547084Z",
+      "step": "INPUT_LOAD",
+      "level": "INFO",
+      "message": "diagnosis input prepared",
+      "data": {
+        "logs": 1,
+        "sourceAvailable": true
+      }
+    },
+    {
+      "seq": 2,
+      "at": "2026-11-06T16:32:13.547233Z",
+      "step": "SANDBOX_CREATE",
+      "level": "INFO",
+      "message": "checking original JavaScript syntax",
+      "data": {}
+    },
+    {
+      "seq": 3,
+      "at": "2026-11-06T16:32:14.365310Z",
+      "step": "SANDBOX_DELETE",
+      "level": "INFO",
+      "message": "original syntax checker finished",
+      "data": {
+        "available": true,
+        "passed": false
+      }
+    },
+    {
+      "seq": 4,
+      "at": "2026-11-06T16:32:14.365460Z",
+      "step": "ANALYZE",
+      "level": "INFO",
+      "message": "diagnosis model request",
+      "data": {
+        "attempt": 1
+      }
+    },
+    {
+      "seq": 5,
+      "at": "2026-11-06T16:32:22.590917Z",
+      "step": "PATCH_PROPOSE",
+      "level": "INFO",
+      "message": "diagnosis edit drafted; syntax verification pending",
+      "data": {
+        "attempt": 1
+      }
+    },
+    {
+      "seq": 6,
+      "at": "2026-11-06T16:32:23.513243Z",
+      "step": "PATCH_VERIFY",
+      "level": "INFO",
+      "message": "candidate syntax checker finished",
+      "data": {
+        "attempt": 1,
+        "available": true,
+        "passed": true
+      }
+    }
+  ],
+  "initialChecks": {
+    "baseline": {
+      "available": true,
+      "passed": true,
+      "toolVersion": "v24.22.2",
+      "issues": [],
+      "reason": null
+    },
+    "broken": {
+      "available": true,
+      "passed": false,
+      "toolVersion": "v24.22.2",
+      "issues": [
+        {
+          "path": "app/static/index.html",
+          "line": 160,
+          "message": "Unexpected token '{'"
+        }
+      ],
+      "reason": null
+    }
+  },
+  "processing": {
+    "location": "gcp/asia-northeast3",
+    "sandbox": false,
+    "modelProvider": "ANTHROPIC",
+    "model": "claude-opus-5-5",
+    "modelRegion": null,
+    "dataClasses": [
+      "LOGS",
+      "SOURCE_CODE"
+    ],
+    "externalTransfer": true,
+    "externalTransferBytes": 52587
+  },
+  "diagnosis": {
+    "analysisStatus": "diagnosed",
+    "summary": "app/static/index.html 160번째 줄의 fetchJson 함수 선언에서 매개변수 목록을 닫는 괄호 ')'가 빠져 있어, 구문 검사에서 SyntaxError: Unexpected token '{' 가 발생했습니다.",
+    "evidenceIds": [
+      "EV000001",
+      "EV000002"
+    ],
+    "sourceEvidenceIds": [
+      "SC000160"
+    ],
+    "canFix": true,
+    "reason": "로그(EV000001, EV000002)는 index.html 160번째 줄에서 예상치 못한 '{' 토큰을 보고합니다. 해당 소스 줄(SC000160)은 `async function fetchJson(url, options, timeoutMs {`로, timeoutMs 뒤에 ')'가 없습니다. 기존 인라인 스크립트 안에서 닫는 괄호만 추가하면 다른 동작에 영향을 주지 않고 구문 오류를 고칠 수 있습니다.",
+    "limitations": [
+      "소스와 커밋의 연결은 요청자가 제공한 정보이며 별도로 검증하지 않았습니다.",
+      "구문 오류 수정이 런타임 동작이나 배포 성공을 보장하지는 않습니다.",
+      "제공된 로그에는 160번째 줄 이후의 추가 구문 오류 여부가 나타나지 않으므로, 수정 후 다시 검사해야 합니다.",
+      "JavaScript 문법만 확인했습니다. 빌드·Trivy·헬스체크·브라우저 동작은 별도 검증이 필요합니다."
+    ],
+    "inputBinding": {
+      "deployRequestId": "synthetic-diagnosis-demo",
+      "sourceCommit": "60e654509ebef785007a408cb1741561c54a8d46",
+      "sourceSha256": "aaf0f14edf0ff05d13ea19d5e694a785dbded5e51b05c27b15b96f74eb023542",
+      "commitVerification": "caller_supplied"
+    },
+    "evidence": [
+      {
+        "id": "EV000001",
+        "chunkId": "real-syntax-check",
+        "stage": "validation",
+        "chunkLine": 1,
+        "sourceLine": null,
+        "text": "app/static/index.html:160: SyntaxError: Unexpected token '{'"
+      },
+      {
+        "id": "EV000002",
+        "chunkId": "syntax-before",
+        "stage": "validation",
+        "chunkLine": 1,
+        "sourceLine": null,
+        "text": "app/static/index.html:160: SyntaxError: Unexpected token '{'"
+      }
+    ],
+    "sourceEvidence": [
+      {
+        "id": "SC000160",
+        "path": "app/static/index.html",
+        "line": 160,
+        "text": "  async function fetchJson(url, options, timeoutMs {"
+      }
+    ],
+    "verification": {
+      "before": {
+        "available": true,
+        "passed": false,
+        "toolVersion": "v24.22.2",
+        "issues": [
+          {
+            "path": "app/static/index.html",
+            "line": 160,
+            "message": "Unexpected token '{'"
+          }
+        ],
+        "reason": null
+      },
+      "after": {
+        "available": true,
+        "passed": true,
+        "toolVersion": "v24.22.2",
+        "issues": [],
+        "reason": null
+      }
+    }
+  },
+  "patches": [
+    {
+      "id": "diagnosis-8bb28f6af3329715",
+      "patchHash": "sha256:8bb28f6af3329715ace21d7f9454b136285b41057324db26c6a4f72547db626c",
+      "files": [
+        "app/static/index.html"
+      ],
+      "diff": "--- a/app/static/index.html\n+++ b/app/static/index.html\n@@ -157,7 +157,7 @@\n     strip: [],\n   };\n \n-  async function fetchJson(url, options, timeoutMs {\n+  async function fetchJson(url, options, timeoutMs) {\n     const ctrl = new AbortController();\n     const timer = setTimeout(() => ctrl.abort(), timeoutMs);\n     try {\n",
+      "reason": "로그(EV000001, EV000002)는 index.html 160번째 줄에서 예상치 못한 '{' 토큰을 보고합니다. 해당 소스 줄(SC000160)은 `async function fetchJson(url, options, timeoutMs {`로, timeoutMs 뒤에 ')'가 없습니다. 기존 인라인 스크립트 안에서 닫는 괄호만 추가하면 다른 동작에 영향을 주지 않고 구문 오류를 고칠 수 있습니다.",
+      "touchesProtectedFiles": false,
+      "origin": "AI",
+      "checks": [
+        {
+          "name": "DIFF_APPLIES",
+          "result": "PASS",
+          "summary": "원본 코드에 수정안을 정확히 적용할 수 있습니다."
+        },
+        {
+          "name": "POLICY",
+          "result": "PASS",
+          "policyVersion": "diagnosis-v1",
+          "summary": "허용된 기존 inline JavaScript만 변경했습니다."
+        },
+        {
+          "name": "JAVASCRIPT_SYNTAX",
+          "result": "PASS",
+          "toolVersion": "v24.22.2",
+          "summary": "같은 문법 검사에서 원본은 실패하고 수정본은 통과했습니다."
+        }
+      ]
+    }
+  ],
+  "postRunChecks": {
+    "existingRunnerState": "active",
+    "existingRelease": "/opt/echo-ai-agent/releases/82aac70",
+    "existingReleaseUnchanged": true,
+    "temporaryRunDirectoryRemoved": true,
+    "transferArchiveRemoved": true,
+    "syntaxContainersRemaining": [],
+    "pinnedNodeImageCached": true
+  }
+}
