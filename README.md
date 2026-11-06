@@ -206,6 +206,14 @@ sudo ln -sfn /opt/echo-ai-agent/releases/<이전 sha> /opt/echo-ai-agent/current
     ECHO_APPLY_REPO_ROOT=<scenarios/ 가 있는 체크아웃> uv run python -m echo_agent.precheck_runner --once --no-model
   ```
 
+## 배포 실패 진단 (CHANGE_PROPOSAL, 간단판, 기본 꺼짐)
+
+SPEC [`specs/ai-5-diagnosis-simple.md`](specs/ai-5-diagnosis-simple.md). ai#22 에서 교체할 수 있는 간단판이다.
+
+- 스위치 `ECHO_DIAGNOSIS=on|off`(기본 off). 켜면 claim 에 `CHANGE_PROPOSAL` 을 싣는다. 시작 로그 `diagnosis: off|rules only|rules + model`.
+- 실패 로그 꼬리에서 파일·줄을 규칙으로 찾고, 서비스 저장소 실패 커밋(공개 tarball, 토큰 없음)의 그 파일 ±60줄 + 로그 50줄로 Claude 를 한 번 부른다. 모델 diff 는 `git apply --check` 를 통과해야 패치(origin AI)로 낸다. 아니면 근거 부족.
+- 진단 패치가 승인되면 오는 APPLY_PATCH(입력에 `diagnosis`)는 서비스 저장소 실패 커밋에서 적용·빌드·Trivy·healthz 를 본다. push 하지 않는다(저장소 반영은 WAS).
+
 ## 지키는 것
 
 - 모델이 고른 명령은 작업 공간 컨테이너 안 `sh -c`에서만 돈다. 호스트는 셸을 거치지 않는다.
