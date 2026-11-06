@@ -37,6 +37,7 @@ from echo_agent.apply_runner import (
     apply_file_diff,
     apply_patch_enabled,
     build_apply_result,
+    check_real_targets,
     check_target,
     claim_capabilities,
     compute_patch_hash,
@@ -481,6 +482,96 @@ def test_missing_target_file_fails(tmp_path: Path) -> None:
     (status, failure, _, _), events = _execute(_runner(root, FakeTools()), _snapshot())
     assert (status, failure) == ("FAILED", FAILURE_PATCH_APPLY_FAILED)
     assert any(e.data.get("reason") == "TARGET_MISSING" for e in events.events)
+
+
+# ---------------------------------------------------------------- 심볼릭 링크·실제 경로 탈출
+
+
+def _symlink_repo(tmp_path: Path, *, kind: str, git: bool) -> tuple[Path, Path]:
+    """`scenarios/demo-app-test/Dockerfile` 이 시나리오 밖을 가리키는 체크아웃과 밖 파일."""
+    root = tmp_path / "checkout"
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    outside = outside_dir / "Dockerfile"
+    outside.write_text(ORIGINAL, encoding="utf-8")
+    if kind == "file":
+        (root / SCENARIO).mkdir(parents=True)
+        (root / DOCKERFILE).symlink_to(outside)
+    else:  # 상위 디렉터리(시나리오 폴더)가 밖 폴더의 링크
+        (root / "scenarios").mkdir(parents=True)
+        (root / SCENARIO).symlink_to(outside_dir, target_is_directory=True)
+    if git:
+        _git(root, "init", "--quiet", "--initial-branch", "main")
+        _git(root, "add", ".")
+        _git(root, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "b")
+    return root, outside
+
+
+@pytest.mark.parametrize("git", [True, False])
+@pytest.mark.parametrize("kind", ["file", "parent"])
+def test_symlinked_target_is_rejected_before_any_write(
+    tmp_path: Path, kind: str, git: bool
+) -> None:
+    if git and not GIT_AVAILABLE:
+        pytest.skip("git 이 없음")
+    root, outside = _symlink_repo(tmp_path, kind=kind, git=git)
+    before = (outside.read_bytes(), outside.stat().st_mtime_ns)
+    tools = FakeTools()
+    (status, failure, sha, _), events = _execute(_runner(root, tools), _snapshot())
+
+    assert (status, failure, sha) == ("FAILED", FAILURE_PATCH_TARGET_FORBIDDEN, None)
+    assert any(e.data.get("reason") == "SYMLINK" for e in events.events)
+    assert "patch applied" not in _messages(events)
+    assert (outside.read_bytes(), outside.stat().st_mtime_ns) == before  # 밖 파일 쓰기 0
+    assert tools.calls == []  # docker·trivy 를 부르기 전에 멈춘다
+    assert events.events[-1].message == "apply workspace deleted"
+
+
+def test_check_real_targets_rejects_links_and_accepts_plain_files(tmp_path: Path) -> None:
+    root = tmp_path / "checkout"
+    (root / SCENARIO).mkdir(parents=True)
+    (root / DOCKERFILE).write_text(ORIGINAL, encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("밖\n", encoding="utf-8")
+    (root / SCENARIO / "linked").symlink_to(outside)
+    (root / SCENARIO / "inner-link").symlink_to(root / DOCKERFILE)  # 안을 가리켜도 링크는 거부
+    (root / SCENARIO / "dir-link").symlink_to(tmp_path, target_is_directory=True)
+
+    # 정상 파일·아직 없는 새 파일은 통과한다(쓰기 없음).
+    check_real_targets(root, [DOCKERFILE, f"{SCENARIO}/new-file"])
+    assert (root / DOCKERFILE).read_text(encoding="utf-8") == ORIGINAL
+    assert not (root / SCENARIO / "new-file").exists()
+    for name in [
+        f"{SCENARIO}/linked",  # 파일 링크
+        f"{SCENARIO}/inner-link",
+        f"{SCENARIO}/dir-link/outside.txt",  # 상위 디렉터리 링크
+        f"{SCENARIO}/dir-link/not-yet",  # 링크 아래 새 파일
+    ]:
+        with pytest.raises(_ApplyFailed) as error:
+            check_real_targets(root, [DOCKERFILE, name])  # 이름 바꾸기 양쪽처럼 둘 다 검사
+        assert (error.value.code, error.value.reason) == (FAILURE_PATCH_TARGET_FORBIDDEN, "SYMLINK")
+    assert outside.read_text(encoding="utf-8") == "밖\n"
+
+
+def test_check_real_targets_rejects_symlinked_scenarios_root(tmp_path: Path) -> None:
+    root = tmp_path / "checkout"
+    root.mkdir()
+    real_scenarios = tmp_path / "elsewhere"
+    (real_scenarios / "demo-app-test").mkdir(parents=True)
+    (root / "scenarios").symlink_to(real_scenarios, target_is_directory=True)
+    with pytest.raises(_ApplyFailed) as error:
+        check_real_targets(root, [DOCKERFILE])
+    assert (error.value.code, error.value.reason) == (FAILURE_PATCH_TARGET_FORBIDDEN, "SYMLINK")
+
+
+def test_symlink_check_keeps_normal_git_apply_working(tmp_path: Path) -> None:
+    if not GIT_AVAILABLE:
+        pytest.skip("git 이 없음")
+    root = _repo(tmp_path, git=True)
+    (status, failure, sha, _), events = _execute(_runner(root, FakeTools()), _snapshot())
+    assert (status, failure) == ("SUCCEEDED", None) and sha is not None
+    assert "patch target rejected" not in _messages(events)
+    assert (root / DOCKERFILE).read_text(encoding="utf-8") == ORIGINAL
 
 
 @pytest.mark.parametrize(("docker", "trivy"), [(False, True), (True, False)])

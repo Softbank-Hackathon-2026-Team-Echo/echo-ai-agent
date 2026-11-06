@@ -271,6 +271,26 @@ def check_target(files: Sequence[str], diff: str) -> str:
     return scenario
 
 
+def check_real_targets(root: Path, names: Sequence[str]) -> None:
+    """작업 사본 `root` 에서 패치 대상의 실제 경로를 검사한다(적용 전, 쓰기 없음).
+
+    경로 문자열 검사(`check_target`)만으로는 체크아웃 안의 심볼릭 링크를 막지 못한다.
+    대상 파일과 `scenarios/` 부터의 모든 상위 디렉터리가 심볼릭 링크가 아니어야 하고,
+    `resolve()` 한 실제 경로가 작업 사본 `scenarios/` 의 실제 경로 안이어야 한다.
+    아직 없는 경로(추가)·지울 경로·이름 바꾸기 양쪽 모두 같은 검사를 받는다.
+    """
+    scenarios_real = (root / SCENARIOS_DIR).resolve()
+    for name in names:
+        current = root
+        for part in name.split("/"):
+            current = current / part
+            if current.is_symlink():
+                raise _ApplyFailed(FAILURE_PATCH_TARGET_FORBIDDEN, "SYMLINK")
+        real = (root / name).resolve()
+        if real == scenarios_real or not real.is_relative_to(scenarios_real):
+            raise _ApplyFailed(FAILURE_PATCH_TARGET_FORBIDDEN, "REAL_PATH_OUTSIDE_SCENARIOS")
+
+
 # ---------------------------------------------------------------- unified diff 적용
 
 
@@ -687,6 +707,17 @@ class ApplyRunner:
             scenario=scenario,
         )
 
+        # 읽기·쓰기 전에 실제 경로를 본다: 사본 안 심볼릭 링크로 시나리오 밖을 고치지 않는다.
+        try:
+            check_real_targets(source_root, sorted({*spec.files, *diff_paths(spec.diff)}))
+        except _ApplyFailed as failure:
+            events.add(
+                RunStep.PATCH_VERIFY,
+                "patch target rejected",
+                EventLevel.ERROR,
+                reason=failure.reason,
+            )
+            raise
         originals: dict[str, str] = {}
         for name in spec.files:
             path = source_root / name
