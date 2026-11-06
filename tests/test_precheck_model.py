@@ -5,6 +5,7 @@ SPEC `specs/ai-4-precheck-model-review.md` AC-1~AC-10.
 
 import copy
 import json
+import re
 import threading
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -28,11 +29,22 @@ from echo_agent.precheck_model import (
     PrecheckReviewer,
     ReviewStatus,
     build_model_input,
+    mask_tokens,
+    model_data_classes,
     parse_review_output,
     render_user_message,
+    request_body_bytes,
+    secret_candidates,
 )
 from echo_agent.precheck_rules import TEXT_LIMIT, analyze, parse_snapshot
-from echo_agent.precheck_runner import main, process_run, run_loop
+from echo_agent.precheck_runner import (
+    FAILURE_DEADLINE,
+    build_processing,
+    build_result,
+    main,
+    process_run,
+    run_loop,
+)
 from tests.test_precheck_rules import SOURCE_ID, TARGET_ID, _snapshot
 from tests.test_was_client import (
     RUN_CRED,
@@ -348,12 +360,44 @@ def test_main_without_key_exits_before_claiming(monkeypatch: pytest.MonkeyPatch)
 # ---------------------------------------------------------------- 러너 한 바퀴
 
 
+PROCESSING_KEYS = {
+    "location", "sandbox", "modelProvider", "model", "modelRegion",
+    "dataClasses", "externalTransfer", "externalTransferBytes",
+}  # fmt: skip
+
+
+def _assert_was_accepts_processing(processing: dict[str, Any]) -> None:
+    """echo-was `RunProcessingRequest`(origin/main `2d99c49`) 검사를 그대로 옮긴 것."""
+    assert set(processing) <= PROCESSING_KEYS
+    assert re.fullmatch(r"[a-z][a-z0-9-]{0,15}/[a-z0-9-]{1,40}", processing["location"])
+    assert type(processing["sandbox"]) is bool  # StrictBool
+    assert type(processing["externalTransfer"]) is bool
+    provider = processing["modelProvider"]
+    assert provider in {"NONE", "LOCAL", "GOOGLE_VERTEX", "AWS_BEDROCK", "OPENAI", "ANTHROPIC"}
+    model, region = processing.get("model"), processing.get("modelRegion")
+    assert model is None or re.fullmatch(r"[A-Za-z0-9._:/@-]{1,64}", model)
+    assert region is None or re.fullmatch(r"[a-z0-9-]{1,40}", region)
+    classes = processing["dataClasses"]
+    assert set(classes) <= {"CONFIG", "FINDINGS", "SOURCE_CODE", "LOGS", "SECRETS"}
+    assert len(classes) == len(set(classes)) <= 5
+    size = processing.get("externalTransferBytes")
+    assert size is None or (type(size) is int and 0 <= size <= 2**63 - 1)
+    if provider == "NONE":
+        assert (model, region, classes, processing["externalTransfer"]) == (None, None, [], False)
+    else:
+        assert model is not None
+    if not processing["externalTransfer"]:
+        assert not size
+
+
 def _assert_was_accepts(result: dict[str, Any]) -> None:
     """echo-was `app/schemas/runner.py`(origin/main) 의 결과 검사 중 이 러너에 걸리는 것."""
-    assert set(result) == {
+    assert set(result) - {"processing"} == {
         "status", "failureCode", "simulated", "sandbox", "model",
         "configDiff", "featureGaps", "findings", "patches", "blockedAttempts",
     }  # fmt: skip
+    if result.get("processing") is not None:
+        _assert_was_accepts_processing(result["processing"])
     assert "\x00" not in json.dumps(result)
     assert len(result["findings"]) <= 100 and len(result["configDiff"]) <= 200
     model = result["model"]
@@ -405,6 +449,17 @@ def test_full_run_with_model_fills_model_and_ai_warnings() -> None:
     assert all(len(e["message"]) <= 200 for e in events)
     assert all(len(json.dumps(e["data"], ensure_ascii=False)) <= 2_000 for e in events)
     assert RUN_CRED not in json.dumps(result)  # 결과 본문(헤더 아님)
+    # 레지던시 기록: Anthropic 직접 호출(리전 없음), 비밀값 안 보냄(echo-was #80 조건부 허용)
+    assert result["processing"] == {
+        "location": "gcp/asia-northeast3",
+        "sandbox": False,
+        "modelProvider": "ANTHROPIC",
+        "model": DEFAULT_MODEL,
+        "modelRegion": None,
+        "dataClasses": ["CONFIG", "FINDINGS"],
+        "externalTransfer": True,
+        "externalTransferBytes": request_body_bytes(create.calls[0]),
+    }
 
 
 @pytest.mark.parametrize(
@@ -427,6 +482,10 @@ def test_runner_model_failure_still_succeeds(result: Any, message: str) -> None:
     last = _sent_events(fake)[-1]
     assert (last["message"], last["level"]) == (message, "WARN")
     assert outcome.submitted and outcome.review in {"FAILED", "REFUSED"}
+    # 요청은 나갔으므로 model=null 이어도 레지던시 기록은 남긴다(processing 과 model 은 따로).
+    processing = sent["processing"]
+    assert (processing["modelProvider"], processing["model"]) == ("ANTHROPIC", DEFAULT_MODEL)
+    assert processing["externalTransfer"] is True and processing["externalTransferBytes"] > 0
 
 
 def test_runner_skips_model_near_deadline() -> None:
@@ -441,3 +500,252 @@ def test_runner_skips_model_near_deadline() -> None:
     assert fake.bodies("result")[0]["status"] == "SUCCEEDED"
     assert outcome.review == "SKIPPED"
     assert _sent_events(fake)[-1]["message"] == "model review skipped; deadline too close"
+    assert "processing" not in fake.bodies("result")[0]  # 부르지 않았으니 기록할 전송이 없다
+
+
+# ---------------------------------------------------------------- 레지던시 기록 processing
+
+
+def test_no_model_run_sends_no_processing() -> None:
+    """`--no-model`(ECHO_PRECHECK_MODEL=off): 칸을 빼고 낸다 → WAS 는 \"기록 없음\"으로 센다."""
+    fake = FakeWas(_routes())
+    process_run(_client(fake), _claimed(fake), log=lambda m: None)
+    result = fake.bodies("result")[0]
+    _assert_was_accepts(result)
+    assert "processing" not in result
+
+
+def test_processing_counts_the_bytes_of_the_request_actually_sent() -> None:
+    create = FakeCreate()
+    review = _review(create)
+    assert review.transfer is not None
+    (call,) = create.calls
+    body = {k: v for k, v in call.items() if k not in ("timeout", "betas")}
+    expected = len(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    assert review.transfer.request_bytes == expected > len(call["messages"][0]["content"])
+    assert (review.transfer.provider, review.transfer.region) == ("ANTHROPIC", None)
+
+
+def test_processing_model_is_the_requested_model_even_on_fallback() -> None:
+    """`processing.model` 은 요청한 모델, 결과 `model.id` 는 실제로 답한 모델(D-10)."""
+    review = _review(FakeCreate(_response(model="claude-opus-4-8")))
+    processing = build_processing(review)
+    assert review.model is not None and review.model.id == "claude-opus-4-8"
+    assert processing is not None and processing["model"] == DEFAULT_MODEL
+
+
+def test_data_classes_follow_what_the_model_input_holds() -> None:
+    raw = _snapshot()
+    model_input = build_model_input(raw, parse_snapshot(raw), analyze(raw))
+    assert model_data_classes(model_input) == ("CONFIG", "FINDINGS")
+    bare = {**model_input, "recentFindings": [], "ruleResults": {"configDiff": [], "findings": []}}
+    assert model_data_classes(bare) == ("CONFIG",)
+
+
+def test_processing_never_claims_secrets_and_secret_values_stay_out() -> None:
+    """변수 값·비밀 이름 칸을 보내지 않으므로 SECRETS 가 없다(echo-was 조건부 허용의 근거)."""
+    payload = _run_payload()
+    payload["run"]["inputSnapshot"] = _hostile_snapshot()
+    fake = FakeWas(_routes(**{"runs:claim": lambda p, b: ok(payload)}))
+    create = FakeCreate()
+    process_run(
+        _client(fake), _claimed(fake), log=lambda m: None, reviewer=PrecheckReviewer(create)
+    )
+    result = fake.bodies("result")[0]
+    _assert_was_accepts(result)
+    assert "SECRETS" not in result["processing"]["dataClasses"]
+    sent = json.dumps(create.calls, ensure_ascii=False)
+    assert "pw-value-123" not in sent and "tok-value-xyz" not in sent
+
+
+# 가짜 토큰은 실행 중에 이어 붙인다(저장소에 토큰 모양 문자열을 두지 않게).
+_FAKE_TOKENS = {
+    "github-ghp": "ghp_" + "T" * 36,
+    "github-gho": "gho_" + "T1" * 18,
+    "github-ghu": "ghu_" + "T2" * 18,
+    "github-ghs": "ghs_" + "T3" * 18,
+    "github-ghr": "ghr_" + "T4" * 18,
+    "github-pat": "github_pat_" + "T5_" * 20,
+    "aws-akia": "AKIA" + "TESTONLY" * 2,
+    "aws-asia": "ASIA" + "TESTONLY" * 2,
+    "gcp-api-key": "AIza" + "T" * 35,
+    "gcp-oauth": "ya29." + "a0TestOnly" * 4,
+    "slack": "xoxb-" + "1234-5678-" + "TestOnly" * 3,
+    "jwt": "eyJ" + "hbGciOiJIUzI1NiJ9" + ".eyJ" + "zdWIiOiJ0ZXN0In0" + "." + "SIG" * 12,
+    "pem": "-----BEGIN " + "PRIVATE KEY-----\nMIIE" + "T" * 60 + "\n-----END PRIVATE KEY-----",
+    "pem-truncated": "-----BEGIN " + "RSA PRIVATE KEY-----\nMIIE" + "T" * 60,
+    "bearer": "Authorization: Bearer " + "tEsT0nly" * 5,
+    "basic": "Authorization: Basic " + "dXNlcjpwYXNz" + "VGVzdA==",
+    "url-userinfo": "postgres://echo:" + "pw-TestOnly-9" + "@db.internal:5432/shop",
+    "anthropic": "sk-ant-" + "api03-" + "T" * 40,
+    "generic-sk": "sk-" + "TestOnly" * 4,
+    "echo-run": "echo_run_" + "TestOnly" * 4,
+}
+# 가린 뒤 남으면 안 되는 비밀 조각(위 값의 비밀 부분).
+_SECRET_PARTS = {
+    "pem": "T" * 60,
+    "pem-truncated": "T" * 60,
+    "bearer": "tEsT0nly",
+    "basic": "dXNlcjpwYXNz",
+    "url-userinfo": "pw-TestOnly-9",
+}
+# 알려진 패턴에 없는 고엔트로피 문자열(시험 전용 난수 모양).
+UNKNOWN_HIGH_ENTROPY = "q7Lm2Xv9Rt4Kp1Wz" + "8Yb3Nc6Hd5Fg0Js2"
+
+
+def _snapshot_with_source_config(**config: Any) -> dict[str, Any]:
+    """검증자 probe 와 같은 조합: WAS 가 허용하는 일반 설정 칸(clusterName 등)에 값을 둔다."""
+    raw = _snapshot()
+    raw["source"]["config"] = {"region": "ap-northeast-1", **config}
+    raw["target"]["config"] = {
+        "projectId": "echo-prod",
+        "region": "asia-northeast3",
+        "clusterName": "echo-gke",
+    }
+    return raw
+
+
+@pytest.mark.parametrize("name", sorted(_FAKE_TOKENS))
+def test_known_token_shapes_in_plain_fields_are_masked_without_claiming_secrets(name: str) -> None:
+    """D-21: 일반 칸의 토큰 모양도 가린다. 가렸으면 남은 값이 없으니 SECRETS 는 신고하지 않는다."""
+    value = _FAKE_TOKENS[name]
+    raw = _snapshot_with_source_config(clusterName=value, note=f"see {value} here")
+    create = FakeCreate()
+    review = _review(create, raw)
+    sent = json.dumps(create.calls, ensure_ascii=False)
+    assert value not in sent
+    assert _SECRET_PARTS.get(name, value) not in sent
+    assert "***" in sent
+    assert review.transfer is not None
+    assert "SECRETS" not in review.transfer.data_classes
+    assert "secretCandidates" not in review.detail
+
+
+def test_verifier_probe_github_pat_in_cluster_name_is_masked() -> None:
+    """검증자 재현(`pr21_probe.py`): clusterName 의 GitHub PAT 이 입력에 남고 CONFIG 만 신고했다."""
+    canary = "ghp_" + "T" * 36
+    raw = _snapshot_with_source_config(clusterName=canary)
+    payload = _run_payload()
+    payload["run"]["inputSnapshot"] = raw
+    fake = FakeWas(_routes(**{"runs:claim": lambda p, b: ok(payload)}))
+    create = FakeCreate()
+    process_run(
+        _client(fake), _claimed(fake), log=lambda m: None, reviewer=PrecheckReviewer(create)
+    )
+    (call,) = create.calls
+    assert canary not in json.dumps(call, ensure_ascii=False)
+    result = fake.bodies("result")[0]
+    _assert_was_accepts(result)
+    assert result["processing"]["dataClasses"] == ["CONFIG", "FINDINGS"]
+    # 결과의 규칙 configDiff 는 WAS 로만 가고(외부 전송 아님) WAS 가 저장 전에 다시 가린다.
+
+
+def test_unknown_high_entropy_value_claims_secrets() -> None:
+    """D-21: 가린 뒤에도 고엔트로피 토큰 후보가 남으면 SECRETS 를 신고해 WAS 가 위반으로 센다."""
+    raw = _snapshot_with_source_config(clusterName=UNKNOWN_HIGH_ENTROPY)
+    payload = _run_payload()
+    payload["run"]["inputSnapshot"] = raw
+    fake = FakeWas(_routes(**{"runs:claim": lambda p, b: ok(payload)}))
+    create = FakeCreate()
+    process_run(
+        _client(fake), _claimed(fake), log=lambda m: None, reviewer=PrecheckReviewer(create)
+    )
+    result = fake.bodies("result")[0]
+    _assert_was_accepts(result)
+    processing = result["processing"]
+    assert processing["dataClasses"] == ["CONFIG", "FINDINGS", "SECRETS"]
+    assert processing["externalTransfer"] is True
+    # 이벤트에는 후보 수만 남고 값은 남지 않는다.
+    events = json.dumps(_sent_events(fake), ensure_ascii=False)
+    assert re.search(r'"secretCandidates": [1-9]', events)
+    assert UNKNOWN_HIGH_ENTROPY not in events
+
+
+def test_secret_candidate_is_counted_in_keys_and_lists_too() -> None:
+    model_input = {
+        "source": {"config": {UNKNOWN_HIGH_ENTROPY: "x"}},
+        "list": [UNKNOWN_HIGH_ENTROPY],
+    }
+    assert secret_candidates(model_input) == 2
+    assert model_data_classes(model_input) == ("CONFIG", "SECRETS")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "sha256:" + "0123456789abcdef" * 4,  # 이미지 digest
+        "asia-northeast3-docker.pkg.dev/echo-prod/echo/shop@sha256:" + "fedcba9876543210" * 4,
+        "0123456789abcdef" * 4,  # 접두어 없는 sha256
+        "0123456789abcdef01234567" + "89abcdef01234567",  # git 커밋 40자리
+        "86df11bc-3a26-4d69-b935-1b2ad9a74be0",  # UUID
+        "projects/echo-prod/locations/asia-northeast3/clusters/echo-gke-autopilot-2026",
+        "/var/lib/echo-agent/cache/trivy-db/2026-11-06/metadata.json",
+        "arn:aws:eks:ap-northeast-1:123456789012:cluster/echo-eks-production-cluster",
+        "DATABASE_URL_FOR_PRIMARY_REPLICA_2_READ_ONLY",
+        "echo-runner@echo-prod-123456.iam.gserviceaccount.com",
+        "Basic authentication is enabled for the internal dashboard",
+        "disk-encryption-enabled-for-all-volumes",
+        "2026-11-06T10:00:00.123456789+09:00",
+    ],
+)
+def test_digests_uuids_and_long_names_are_not_secret_candidates(value: str) -> None:
+    """오탐 방지: digest·UUID·경로·이미지·긴 이름은 후보가 아니고 가리지도 않는다."""
+    raw = _snapshot_with_source_config(clusterName=value)
+    create = FakeCreate()
+    review = _review(create, raw)
+    assert secret_candidates(value) == 0
+    assert review.transfer is not None
+    assert "SECRETS" not in review.transfer.data_classes
+    assert mask_tokens(value) == value
+
+
+def test_processing_kept_when_deadline_fails_the_run_after_the_call() -> None:
+    """모델 호출 뒤 마감으로 FAILED 가 돼도 이미 나간 요청은 기록한다(계약: FAILED 여도 true)."""
+    now = datetime.now(UTC)
+    deadline = now + timedelta(minutes=15)
+    clock = {"now": now}
+
+    class SlowCreate(FakeCreate):
+        def __call__(self, **kwargs: Any) -> SimpleNamespace:
+            clock["now"] = deadline  # 응답이 마감 직전에 왔다
+            return super().__call__(**kwargs)
+
+    fake = FakeWas(_routes(**{"runs:claim": lambda p, b: ok(_run_payload(deadline))}))
+    process_run(
+        _client(fake),
+        _claimed(fake),
+        clock=lambda: clock["now"],
+        log=lambda m: None,
+        reviewer=PrecheckReviewer(SlowCreate()),
+    )
+    result = fake.bodies("result")[0]
+    _assert_was_accepts(result)
+    assert (result["status"], result["failureCode"], result["model"]) == (
+        "FAILED",
+        FAILURE_DEADLINE,
+        None,
+    )
+    assert result["processing"]["externalTransfer"] is True
+
+
+def test_processing_dropped_when_model_name_breaks_the_was_pattern() -> None:
+    """WAS 가 422 로 결과 전체를 거절하지 않게, 패턴에 맞지 않는 모델 이름이면 칸을 뺀다."""
+    raw = _snapshot()
+    review = PrecheckReviewer(FakeCreate(), model="bad model name").review(
+        raw, parse_snapshot(raw), analyze(raw), seconds_left=PLENTY
+    )
+    assert review.transfer is not None
+    assert build_processing(review) is None
+    assert build_processing(None) is None
+
+
+def test_build_result_without_processing_keeps_the_previous_shape() -> None:
+    analysis = analyze(_snapshot())
+    plain = build_result(analysis, status="SUCCEEDED", failure_code=None)
+    assert "processing" not in plain
+    processing = build_processing(_review(FakeCreate()))
+    assert processing is not None
+    with_record = build_result(
+        analysis, status="SUCCEEDED", failure_code=None, processing=processing
+    )
+    assert with_record == {**plain, "processing": processing}

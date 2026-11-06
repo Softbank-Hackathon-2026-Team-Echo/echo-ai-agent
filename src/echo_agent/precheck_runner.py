@@ -8,6 +8,8 @@
   (→ WAS 가 `aiReviewed=true`)과 `origin: "AI"` WARN finding 이 붙는다(`precheck_model.py`).
 - 모델이 실패·거절하거나 마감이 가까우면 규칙 결과만으로 `SUCCEEDED`·`model=null`
   (SPEC `specs/ai-4-precheck-model-review.md` D-7·D-8·D-9). `--no-model` 이면 처음부터 규칙만.
+- 모델 API 로 요청을 보냈으면(실패·거절·마감으로 FAILED 가 돼도) 레지던시 기록 `processing`
+  을 싣는다(echo-was `RunProcessingRequest`, SPEC 9절). 모델을 부르지 않았으면 칸을 빼고 낸다.
 - 모델 검토 뒤 규칙 패치 제안 단계가 돈다(`precheck_patch.py`). 기본은 끔이고 `--patch` 로 켠다.
   WAS 가 패치가 실린 결과를 422 `RESULT_INVALID` 로 거절하면 `patches=[]` 로 한 번 다시 낸다.
 - 마감(`deadlineAt`) 1분 전이 지나면 분석 결과 대신 `FAILED`·`DEADLINE` 을 낸다(계약 §7).
@@ -19,6 +21,7 @@ echo_agent.precheck_runner --once`
 
 import argparse
 import os
+import re
 import signal
 import sys
 import threading
@@ -73,6 +76,13 @@ FAILURE_RUNNER_ERROR = "RUNNER_ERROR"
 
 RESULT_INVALID = "RESULT_INVALID"
 
+# 레지던시 기록의 처리 위치: 샌드박스 VM `echo-sandbox-runner`(GCP `asia-northeast3-a`).
+PROCESSING_LOCATION = "gcp/asia-northeast3"
+# 모델 검토는 작업 공간 컨테이너가 아니라 러너 제어 프로세스에서 돈다(결과 `sandbox=null` 과 같음).
+PROCESSING_IN_SANDBOX = False
+# echo-was `PROCESSING_MODEL_PATTERN`. 맞지 않는 모델 이름이면 422 대신 기록을 빼고 낸다.
+_PROCESSING_MODEL = re.compile(r"[A-Za-z0-9._:/@-]{1,64}")
+
 Clock = Callable[[], datetime]
 Logger = Callable[[str], None]
 
@@ -102,6 +112,28 @@ def analyze_run(run: ClaimedRun) -> PrecheckAnalysis:
     return analyze(run.input_snapshot)
 
 
+def build_processing(review: ModelReview | None) -> dict[str, Any] | None:
+    """레지던시 기록 `processing`(echo-was `RunProcessingRequest`, `docs/agent-runner.md`).
+
+    모델 API 로 요청을 보냈을 때만 만든다. 부르지 않았으면(`--no-model`·SKIPPED·보내기 전
+    실패) None 이고 결과에서 칸을 뺀다. `processing` 과 결과 `model` 은 서로 맞추지 않는다:
+    거절·실패로 `model=null` 이어도 요청이 나갔으면 기록한다.
+    """
+    transfer = review.transfer if review is not None else None
+    if transfer is None or not _PROCESSING_MODEL.fullmatch(transfer.model):
+        return None
+    return {
+        "location": PROCESSING_LOCATION,
+        "sandbox": PROCESSING_IN_SANDBOX,
+        "modelProvider": transfer.provider,
+        "model": transfer.model,
+        "modelRegion": transfer.region,
+        "dataClasses": list(transfer.data_classes),
+        "externalTransfer": True,
+        "externalTransferBytes": transfer.request_bytes,
+    }
+
+
 def build_result(
     analysis: PrecheckAnalysis | None,
     *,
@@ -109,17 +141,19 @@ def build_result(
     failure_code: str | None,
     review: ModelReview | None = None,
     patches: Sequence[Mapping[str, Any]] = (),
+    processing: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """`RunResult`(echo-was SPEC §5.3). WAS 는 모르는 칸을 422 로 거절하므로 칸을 더하지 않는다.
 
     규칙 findings 를 먼저 두고, 모델 검토가 됐을 때만 AI findings·`model` 을 붙인다.
+    `processing`(선택 칸)은 있을 때만 싣는다. 없으면 모델을 안 쓴 예전 결과와 같다.
     """
     findings = [f.to_json() for f in analysis.findings] if analysis else []
     model = None
     if analysis is not None and review is not None and review.model is not None:
         model = review.model.to_json()
         findings += [f.to_json() for f in review.findings]
-    return {
+    result: dict[str, Any] = {
         "status": status,
         "failureCode": failure_code,
         "simulated": False,
@@ -131,6 +165,9 @@ def build_result(
         "patches": [dict(p) for p in patches] if analysis else [],
         "blockedAttempts": [],
     }
+    if processing is not None:
+        result["processing"] = dict(processing)
+    return result
 
 
 # ---------------------------------------------------------------- 하트비트
@@ -239,6 +276,8 @@ def process_run(
             patches = patcher.propose(run, sender.events, cutoff - clock(), sender.flush)
             sender.flush()
         review_status = review.status.value if review else None
+        # 마감으로 FAILED 가 돼도 이미 나간 요청은 기록한다(echo-was docs/agent-runner.md).
+        processing = build_processing(review)
         if heartbeat.lost.is_set():
             return RunOutcome(run.id, "LOST", None, submitted=False, review=review_status)
         if clock() >= run.deadline_at - DEADLINE_MARGIN:
@@ -246,7 +285,12 @@ def process_run(
             analysis, status, failure_code, review = None, "FAILED", FAILURE_DEADLINE, None
         sender.flush()
         result = build_result(
-            analysis, status=status, failure_code=failure_code, review=review, patches=patches
+            analysis,
+            status=status,
+            failure_code=failure_code,
+            review=review,
+            patches=patches,
+            processing=processing,
         )
         stored = _submit_or_resend_without_patches(client, run, result, sender)
         return RunOutcome(
