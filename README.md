@@ -63,7 +63,12 @@ WAS 사전 점검 실행을 가져가 출발·도착 환경 설정 차이를 규
    uv run python -m echo_agent.precheck_runner --once   # 한 번 가져가 보고 끝(실행이 없으면 종료 코드 0)
    uv run python -m echo_agent.precheck_runner          # 계속: 실행이 없으면 5초 뒤 다시, SIGTERM 으로 멈춤
    uv run python -m echo_agent.precheck_runner --once --no-model   # 모델 없이 규칙만(과금 없음)
+   uv run python -m echo_agent.precheck_runner --once --patch      # 규칙 패치 켬(기본은 끔. WAS 가 patches[].origin 을 받는 뒤에만, echo-was #79. VM 서비스는 아래 "규칙 패치 켜기·끄기")
    ```
+
+   규칙 패치는 손 실행·VM 모두 기본이 끔이다. 켰을 때 WAS 가 패치가 실린 결과를 422 `RESULT_INVALID` 로 거절하면 `patches=[]` 로 한 번 다시 내고 WARN 이벤트("result rejected; resent without rule patch")를 남긴다.
+
+   규칙 패치의 대상과 규칙: [시나리오 사본 README](scenarios/demo-app-0ff0d44/README.md).
 
    흐름: `runs:claim` → 첫 하트비트(CLAIMED → RUNNING) → 30초마다 하트비트 → 이벤트 `INPUT_LOAD`·`CONFIG_DIFF`·`ANALYZE` → 모델 검토(`ANALYZE` 이벤트 "model review started/finished") → `result`. 마감 1분 전이 지나면 `FAILED`·`DEADLINE`, 스냅숏 모양이 v1이 아니면 `FAILED`·`INPUT_INVALID`, 그 밖의 예외는 `FAILED`·`RUNNER_ERROR`.
 
@@ -118,6 +123,26 @@ sudo sed -i 's/^ECHO_PRECHECK_MODEL=.*/ECHO_PRECHECK_MODEL=on/' /etc/echo-preche
   && sudo systemctl restart echo-precheck-runner
 # 확인: 마지막 줄이 "model review: off" 또는 "model review: claude-opus-5-5 medium"
 sudo journalctl -u echo-precheck-runner -o cat | grep 'model review:' | tail -1
+```
+
+### 규칙 패치 켜기·끄기
+
+기본은 끔(`ECHO_PRECHECK_PATCH=off`, `--no-patch`)이고 켜면 `--patch` 로 돈다. WAS 가 `patches[].origin` 을 받기 전(echo-was #79 배포 전)에 켜면 패치가 실린 결과가 422 가 되는데, 러너가 패치를 빼고 한 번 다시 내므로 C-AI-1 증거는 남는다(그래도 #79 배포 뒤에만 켠다). 발동은 시연 서비스(이미지 digest 가 echo-demo-app `0ff0d44` 이미지이거나 서비스 이름 `demo`)의 점검뿐이다. 이 설정이 생기기 전에 설치한 VM 의 `runner.env` 에는 줄이 없어 `sed` 가 아무것도 바꾸지 않으니, 첫 줄로 먼저 더한다.
+
+```bash
+# 줄이 없으면 더하기(한 번)
+grep -q '^ECHO_PRECHECK_PATCH=' /etc/echo-precheck-runner/runner.env \
+  || echo 'ECHO_PRECHECK_PATCH=off' | sudo tee -a /etc/echo-precheck-runner/runner.env >/dev/null
+# 켜기(S1 배포 뒤에만)
+sudo sed -i 's/^ECHO_PRECHECK_PATCH=.*/ECHO_PRECHECK_PATCH=on/' /etc/echo-precheck-runner/runner.env \
+  && sudo systemctl restart echo-precheck-runner
+# 끄기
+sudo sed -i 's/^ECHO_PRECHECK_PATCH=.*/ECHO_PRECHECK_PATCH=off/' /etc/echo-precheck-runner/runner.env \
+  && sudo systemctl restart echo-precheck-runner
+# 확인: 마지막 줄이 "rule patch: on" 또는 "rule patch: off"
+sudo journalctl -u echo-precheck-runner -o cat | grep 'rule patch:' | tail -1
+# 확인: "active" 여야 한다. 값 오타면 종료 코드 2 로 멈춰 "failed"(다시 띄우지 않음) → runner.env 를 고친다
+systemctl is-active echo-precheck-runner
 ```
 
 ### 로그 보기
