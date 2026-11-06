@@ -33,14 +33,14 @@ from typing import Any
 
 from echo_agent.apply_runner import (
     APPLY_PATCH_KIND,
+    CHANGE_PROPOSAL_KIND,
     ApplyConfigError,
     apply_patch_enabled,
     claim_capabilities,
+    diagnosis_enabled,
     process_apply_run,
 )
-from echo_agent.diagnosis import DiagnosisService
-from echo_agent.diagnosis_model import DiagnosisModel
-from echo_agent.diagnosis_runner import DIAGNOSIS_KIND, process_diagnosis_run
+from echo_agent.diagnosis_runner import Diagnoser, DiagnosisModel, process_diagnosis_run
 from echo_agent.events import EventLevel, RunEventLog, RunStep
 from echo_agent.precheck_model import (
     PROMPT_VERSION,
@@ -247,24 +247,34 @@ def process_run(
     log: Logger = _stderr,
     reviewer: PrecheckReviewer | None = None,
     patcher: RulePatcher | None = None,
-    diagnoser: DiagnosisService | None = None,
+    diagnoser: Diagnoser | None = None,
 ) -> RunOutcome:
     """가져간 실행 하나를 끝까지 처리한다. 예외를 밖으로 내지 않는다.
 
     `reviewer` 가 없으면 규칙 비교만 한다(`--no-model`, PR #14 동작).
     `patcher` 가 없으면 패치 단계를 돌리지 않는다(`--no-patch`).
     """
-    if run.kind == DIAGNOSIS_KIND and diagnoser is not None:
-        beat = Heartbeat(client, run, interval=heartbeat_interval, log=log)
-        sender = _EventSender(client, run, log)
-        outcome = process_diagnosis_run(client, run, diagnoser, beat, sender, clock)
-        return RunOutcome(*outcome)
     if run.kind == APPLY_PATCH_KIND and APPLY_PATCH_KIND in claim_capabilities():
         # 반영 실행(스위치 ECHO_APPLY_PATCH=on 일 때만)은 apply_runner 가 맡는다(SPEC ai-5-2).
         apply_beat = Heartbeat(client, run, interval=heartbeat_interval, log=log)
         apply_events = _EventSender(client, run, log)
         outcome = process_apply_run(client, run, apply_beat, apply_events, clock=clock, log=log)
         return RunOutcome(*outcome)
+    if run.kind == CHANGE_PROPOSAL_KIND and CHANGE_PROPOSAL_KIND in claim_capabilities():
+        # 배포 실패 진단(스위치 ECHO_DIAGNOSIS=on 일 때만)은 diagnosis_runner 가 맡는다.
+        # reviewer 가 없으면(--no-model) 진단도 규칙만 쓴다.
+        diagnosis_beat = Heartbeat(client, run, interval=heartbeat_interval, log=log)
+        diagnosis_events = _EventSender(client, run, log)
+        run_id, status, failure, submitted, diagnosis_review = process_diagnosis_run(
+            client,
+            run,
+            diagnosis_beat,
+            diagnosis_events,
+            diagnoser=diagnoser or Diagnoser(None),
+            clock=clock,
+            log=log,
+        )
+        return RunOutcome(run_id, status, failure, submitted, review=diagnosis_review)
     heartbeat = Heartbeat(client, run, interval=heartbeat_interval, log=log)
     sender = _EventSender(client, run, log)
     # 첫 하트비트가 CLAIMED → RUNNING 을 만든다(echo-was AD-2).
@@ -461,15 +471,12 @@ def run_loop(
     log: Logger = _stderr,
     reviewer: PrecheckReviewer | None = None,
     patcher: RulePatcher | None = None,
-    diagnoser: DiagnosisService | None = None,
+    diagnoser: Diagnoser | None = None,
 ) -> int:
     """가져갈 실행이 생길 때마다 처리한다. `--once` 면 한 번 가져가 보고 끝낸다."""
     while not stop.is_set():
         try:
-            capabilities = claim_capabilities()
-            if diagnoser is not None:
-                capabilities = (*capabilities, DIAGNOSIS_KIND)
-            run = client.claim(runner_name, capabilities)
+            run = client.claim(runner_name, claim_capabilities())
         except (WasError, OSError) as error:
             log(f"claim failed: {type(error).__name__} {error}")
             if once:
@@ -525,14 +532,11 @@ def main(argv: list[str] | None = None) -> int:
         help="러너 토큰을 발급할 때 쓴 이름(WAS 가 토큰 이름과 대조)",
     )
     parser.add_argument(
-        "--diagnose",
-        action="store_true",
-        help="협의된 CHANGE_PROPOSAL 진단 계약을 켠다(기본 off, WAS 배포 뒤에만)",
+        "--diagnose", action="store_true", help="ECHO_DIAGNOSIS=on과 같은 명시적 활성화"
     )
     args = parser.parse_args(argv)
-    if args.diagnose and args.no_model:
-        _stderr("config error: --diagnose cannot be combined with --no-model")
-        return 2
+    if args.diagnose:
+        os.environ["ECHO_DIAGNOSIS"] = "on"
     try:
         client = WasClient.from_env()
     except WasConfigError as error:
@@ -540,24 +544,27 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         _stderr(f"apply patch: {'on' if apply_patch_enabled() else 'off'}")
+        diagnosis_on = diagnosis_enabled()
     except ApplyConfigError as error:
         _stderr(f"config error: {error}")
         return 2
     reviewer = None
+    diagnosis_model = None
     if not args.no_model:
         try:
             reviewer = PrecheckReviewer.from_env()
+            diagnosis_model = DiagnosisModel.from_env() if diagnosis_on else None
         except ModelConfigError as error:
             _stderr(f"config error: {error} (규칙만 돌리려면 --no-model)")
             return 2
     _stderr(f"model review: {reviewer.model + ' ' + reviewer.effort if reviewer else 'off'}")
+    diagnoser = Diagnoser(diagnosis_model) if diagnosis_on else None
+    _stderr(
+        "diagnosis: "
+        + ("off" if not diagnosis_on else "rules + model" if diagnosis_model else "rules only")
+    )
     patcher = RulePatcher() if args.patch else None
     _stderr(f"rule patch: {'on' if patcher else 'off'}")
-    diagnoser = (
-        DiagnosisService(DiagnosisModel.from_env(), location=PROCESSING_LOCATION)
-        if args.diagnose
-        else None
-    )
 
     stop = threading.Event()
 

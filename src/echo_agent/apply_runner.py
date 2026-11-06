@@ -33,6 +33,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
+from echo_agent.diagnosis_input import redact, sensitive_source_path
 from echo_agent.events import EventLevel, RunEventLog, RunStep
 from echo_agent.was_client import (
     ClaimedRun,
@@ -44,7 +45,9 @@ from echo_agent.was_client import (
 
 APPLY_PATCH_KIND = "APPLY_PATCH"
 PRECHECK_KIND = "PRECHECK"
+CHANGE_PROPOSAL_KIND = "CHANGE_PROPOSAL"
 SWITCH_ENV = "ECHO_APPLY_PATCH"
+DIAGNOSIS_SWITCH_ENV = "ECHO_DIAGNOSIS"
 REPO_ROOT_ENV = "ECHO_APPLY_REPO_ROOT"
 
 APPLY_INPUT_SCHEMA_VERSION = 1
@@ -89,6 +92,8 @@ COMMIT_AUTHOR_EMAIL = "echo-ai-runner@echoport.invalid"
 _SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 _HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+_SERVICE_REPO = re.compile(r"^(?!\.\.?/)[A-Za-z0-9_.-]{1,100}/(?!\.\.?$)[A-Za-z0-9_.-]{1,100}$")
 
 Clock = Callable[[], datetime]
 Logger = Callable[[str], None]
@@ -148,13 +153,32 @@ def apply_patch_enabled(env: Mapping[str, str] | None = None) -> bool:
     return value == "on"
 
 
+def diagnosis_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """`ECHO_DIAGNOSIS` = on|off(없으면 off). 그 밖의 값은 설정 오류다.
+
+    SPEC `specs/ai-5-diagnosis-simple.md`.
+    """
+    env = os.environ if env is None else env
+    value = env.get(DIAGNOSIS_SWITCH_ENV, "off").strip().lower() or "off"
+    if value not in {"on", "off"}:
+        raise ApplyConfigError(f"{DIAGNOSIS_SWITCH_ENV} must be on or off")
+    return value == "on"
+
+
 def claim_capabilities(env: Mapping[str, str] | None = None) -> tuple[str, ...]:
-    """claim 에 실을 종류. 스위치가 꺼져 있으면 지금과 같은 `("PRECHECK",)`."""
-    try:
-        enabled = apply_patch_enabled(env)
-    except ApplyConfigError:
-        enabled = False  # 시작할 때 main 이 먼저 거른다. 여기서는 꺼진 쪽으로만 간다.
-    return (PRECHECK_KIND, APPLY_PATCH_KIND) if enabled else (PRECHECK_KIND,)
+    """claim 에 실을 종류. 스위치가 둘 다 꺼져 있으면 지금과 같은 `("PRECHECK",)`."""
+    kinds = [PRECHECK_KIND]
+    for kind, switch in (
+        (APPLY_PATCH_KIND, apply_patch_enabled),
+        (CHANGE_PROPOSAL_KIND, diagnosis_enabled),
+    ):
+        try:
+            enabled = switch(env)
+        except ApplyConfigError:
+            enabled = False  # 시작할 때 main 이 먼저 거른다. 여기서는 꺼진 쪽으로만 간다.
+        if enabled:
+            kinds.append(kind)
+    return tuple(kinds)
 
 
 # ---------------------------------------------------------------- 입력·해시·대상
@@ -170,6 +194,8 @@ class ApplyInput:
     origin: str
     repo: str
     branch: str
+    # 배포 실패 진단의 패치면 서비스 저장소의 실패 커밋(echo-was SPEC api-98). 아니면 None.
+    source_commit: str | None = None
 
 
 def compute_patch_hash(diff: str) -> str:
@@ -211,6 +237,29 @@ def parse_apply_input(run: ClaimedRun) -> ApplyInput:
         raise _ApplyFailed(FAILURE_INPUT_INVALID, "PATCH_DIFF")
     if origin not in {"RULE", "AI"}:
         raise _ApplyFailed(FAILURE_INPUT_INVALID, "PATCH_ORIGIN")
+    diagnosis = snapshot.get("diagnosis")
+    if diagnosis is not None:
+        # 배포 실패 진단의 패치: 서비스 저장소 + 실패 커밋에서 적용·검증한다(SPEC ai-5-diagnosis).
+        if not isinstance(diagnosis, Mapping):
+            raise _ApplyFailed(FAILURE_INPUT_INVALID, "DIAGNOSIS_NOT_OBJECT")
+        source_commit = diagnosis.get("sourceCommitSha")
+        if not isinstance(source_commit, str) or not _COMMIT_SHA.match(source_commit):
+            raise _ApplyFailed(FAILURE_INPUT_INVALID, "SOURCE_COMMIT_SHA")
+        if not isinstance(repo, str) or not _SERVICE_REPO.match(repo) or repo == APPLY_REPOSITORY:
+            raise _ApplyFailed(FAILURE_INPUT_INVALID, "SERVICE_REPO")
+        if branch != f"{BRANCH_PREFIX}{run.id}":
+            raise _ApplyFailed(FAILURE_INPUT_INVALID, "BRANCH_NOT_RUN_ID")
+        return ApplyInput(
+            parent_run_id=parent,
+            patch_id=patch_id,
+            patch_hash=patch_hash,
+            files=tuple(files),
+            diff=diff,
+            origin=str(origin),
+            repo=repo,
+            branch=f"{BRANCH_PREFIX}{run.id}",
+            source_commit=source_commit,
+        )
     if repo != APPLY_REPOSITORY:
         raise _ApplyFailed(FAILURE_INPUT_INVALID, "REPO_NOT_ALLOWED")
     if branch != f"{BRANCH_PREFIX}{run.id}":
@@ -289,6 +338,42 @@ def check_real_targets(root: Path, names: Sequence[str]) -> None:
         real = (root / name).resolve()
         if real == scenarios_real or not real.is_relative_to(scenarios_real):
             raise _ApplyFailed(FAILURE_PATCH_TARGET_FORBIDDEN, "REAL_PATH_OUTSIDE_SCENARIOS")
+
+
+def check_service_target(files: Sequence[str], diff: str) -> None:
+    """서비스 저장소 패치(배포 실패 진단)의 경로 검사.
+
+    `files` 와 diff 머리 경로가 같은 집합이고, `..`·절대 경로·숨김 경로(`.github/` 등)·안전하지
+    않은 글자가 없어야 한다. 시나리오 폴더 제한은 없다(대상이 서비스 저장소 자체다).
+    """
+    if set(diff_paths(diff)) != set(files):
+        raise _ApplyFailed(FAILURE_PATCH_TARGET_FORBIDDEN, "FILES_DIFF_MISMATCH")
+    if redact(diff) != diff:
+        raise _ApplyFailed(FAILURE_PATCH_TARGET_FORBIDDEN, "SECRET_IN_DIFF")
+    for path in files:
+        if sensitive_source_path(path):
+            raise _ApplyFailed(FAILURE_PATCH_TARGET_FORBIDDEN, "SENSITIVE_PATH")
+        parts = path.split("/")
+        if path.startswith("/") or any(
+            not _SAFE_SEGMENT.match(part) or part in {".", ".."} for part in parts
+        ):
+            raise _ApplyFailed(FAILURE_PATCH_TARGET_FORBIDDEN, "UNSAFE_PATH")
+        if any(part.startswith(".") for part in parts):
+            raise _ApplyFailed(FAILURE_PATCH_TARGET_FORBIDDEN, "UNSAFE_PATH")
+
+
+def check_real_targets_under(root: Path, names: Sequence[str]) -> None:
+    """`root` 안 실제 경로 검사(심볼릭 링크 없음, `resolve()` 가 `root` 안). 쓰기 없음."""
+    root_real = root.resolve()
+    for name in names:
+        current = root
+        for part in name.split("/"):
+            current = current / part
+            if current.is_symlink():
+                raise _ApplyFailed(FAILURE_PATCH_TARGET_FORBIDDEN, "SYMLINK")
+        real = (root / name).resolve()
+        if real == root_real or not real.is_relative_to(root_real):
+            raise _ApplyFailed(FAILURE_PATCH_TARGET_FORBIDDEN, "REAL_PATH_OUTSIDE_REPOSITORY")
 
 
 # ---------------------------------------------------------------- unified diff 적용
@@ -419,6 +504,37 @@ SCENARIO_BUILDS: dict[str, ScenarioBuild] = {
     ),
 }
 
+# 배포 실패 진단 패치의 서비스 저장소별 빌드 정보(저장소 루트가 빌드 문맥). 표에 없으면
+# `service_build` 의 기본값(루트 Dockerfile, 8080, /healthz)으로 본다.
+# source_commit 은 실행마다 바뀐다.
+SERVICE_BUILDS: dict[str, ScenarioBuild] = {
+    "Softbank-Hackathon-2026-Team-Echo/echo-demo-app": ScenarioBuild(
+        source_repo="Softbank-Hackathon-2026-Team-Echo/echo-demo-app",
+        source_commit="",
+        dockerfile="Dockerfile",
+        healthz_port=8080,
+        healthz_path="/healthz",
+        healthz_env=SCENARIO_BUILDS["scenarios/demo-app-0ff0d44"].healthz_env,
+    ),
+}
+
+
+def service_build(
+    repo: str, commit: str, builds: Mapping[str, ScenarioBuild] | None = None
+) -> ScenarioBuild:
+    """서비스 저장소의 빌드 정보(커밋을 채워서)."""
+    known = (SERVICE_BUILDS if builds is None else builds).get(repo)
+    if known is None:
+        return ScenarioBuild(repo, commit, "Dockerfile", 8080, "/healthz")
+    return ScenarioBuild(
+        repo,
+        commit,
+        known.dockerfile,
+        known.healthz_port,
+        known.healthz_path,
+        dict(known.healthz_env),
+    )
+
 
 # ---------------------------------------------------------------- 외부 명령
 
@@ -460,7 +576,16 @@ def codeload_fetcher(repo: str, commit: str, dest: Path, timeout: float) -> Path
         raise _ApplyFailed(FAILURE_SOURCE_UNAVAILABLE, "ARCHIVE_TOO_LARGE")
     dest.mkdir(parents=True, exist_ok=True)
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
-        archive.extractall(dest, filter="data")  # noqa: S202 — data 필터(경로 탈출·링크 막음)
+        members: list[tarfile.TarInfo] = []
+        total = 0
+        for member in archive:
+            total += member.size
+            if len(members) >= 10_000 or total > 128 * 1024 * 1024:
+                raise _ApplyFailed(FAILURE_SOURCE_UNAVAILABLE, "EXPANDED_ARCHIVE_TOO_LARGE")
+            if not (member.isfile() or member.isdir()):
+                raise _ApplyFailed(FAILURE_SOURCE_UNAVAILABLE, "ARCHIVE_SPECIAL_ENTRY")
+            members.append(member)
+        archive.extractall(dest, members=members, filter="data")  # noqa: S202 — bounded data filter
     roots = [child for child in dest.iterdir() if child.is_dir()]
     if len(roots) != 1:
         raise _ApplyFailed(FAILURE_SOURCE_UNAVAILABLE, "ARCHIVE_LAYOUT")
@@ -531,6 +656,7 @@ class ApplyRunner:
         clock: Clock | None = None,
         workspace_parent: Path | None = None,
         scenario_builds: Mapping[str, ScenarioBuild] | None = None,
+        service_builds: Mapping[str, ScenarioBuild] | None = None,
     ) -> None:
         env_root = os.environ.get(REPO_ROOT_ENV, "").strip()
         self.repo_root = repo_root or (
@@ -542,6 +668,7 @@ class ApplyRunner:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._workspace_parent = workspace_parent
         self._builds = SCENARIO_BUILDS if scenario_builds is None else scenario_builds
+        self._service_builds = service_builds
 
     # -------------------------------------------------- 시간
 
@@ -583,6 +710,27 @@ class ApplyRunner:
                     recomputed=actual,
                 )
                 raise _ApplyFailed(FAILURE_PATCH_HASH_MISMATCH, "HASH_MISMATCH")
+            if spec.source_commit is not None:
+                # 배포 실패 진단의 패치: 서비스 저장소의 실패 커밋에서 적용·빌드·스캔·healthz.
+                check_service_target(spec.files, spec.diff)
+                events.add(
+                    RunStep.INPUT_LOAD,
+                    "patch hash verified",
+                    patchHash=actual,
+                    repo=spec.repo,
+                    sourceCommitSha=spec.source_commit,
+                )
+                flush()
+                workspace = self._create_workspace(run)
+                commit_sha = self._apply_service(run, spec, workspace, events, flush)
+                events.add(
+                    RunStep.PATCH_VERIFY,
+                    "apply checks passed",
+                    appliedCommitSha=commit_sha,
+                    branch=spec.branch,
+                    pushed=False,
+                )
+                return "SUCCEEDED", None, commit_sha, branch
             scenario = check_target(spec.files, spec.diff)
             events.add(
                 RunStep.INPUT_LOAD, "patch hash verified", patchHash=actual, scenario=scenario
@@ -787,6 +935,156 @@ class ApplyRunner:
         before.update({name: text.encode("utf-8") for name, text in originals.items()})
         return commit_sha, before
 
+    # -------------------------------------------------- ①' 서비스 저장소(배포 실패 진단)
+
+    def _apply_service(
+        self,
+        run: ClaimedRun,
+        spec: ApplyInput,
+        workspace: _Workspace,
+        events: RunEventLog,
+        flush: Callable[[], None],
+    ) -> str | None:
+        """서비스 저장소의 실패 커밋 소스를 받아 패치를 적용하고(로컬 커밋) 이미지를 검증한다.
+
+        소스는 공개 저장소 tarball(토큰 없음, 읽기만)이다. git 이 있으면 작업 공간 밖 git 폴더
+        (`--git-dir`)로 기준 커밋 + 패치 커밋을 만든다(빌드 문맥에 `.git` 이 들어가지 않는다).
+        push 하지 않는다. 패치 커밋 SHA(git 이 없으면 None)를 돌려준다.
+        """
+        if spec.source_commit is None:
+            raise _ApplyFailed(FAILURE_INPUT_INVALID, "SOURCE_COMMIT_SHA")
+        build = service_build(spec.repo, spec.source_commit, self._service_builds)
+        try:
+            source = self._fetch(
+                spec.repo,
+                spec.source_commit,
+                workspace.root / "source",
+                self._budget(run, SOURCE_FETCH_SECONDS),
+            )
+        except _ApplyFailed:
+            raise
+        except (OSError, tarfile.TarError, ValueError) as error:
+            events.add(
+                RunStep.PATCH_VERIFY,
+                "service source unavailable",
+                EventLevel.ERROR,
+                error=type(error).__name__,
+                repo=spec.repo,
+            )
+            raise _ApplyFailed(FAILURE_SOURCE_UNAVAILABLE, "FETCH") from error
+        use_git = shutil.which("git") is not None
+        git_dir = workspace.root / "git"
+        events.add(
+            RunStep.SANDBOX_CREATE,
+            "apply workspace created",
+            mode="service-source",
+            repo=spec.repo,
+            baseCommit=spec.source_commit,
+            credentials="none",
+        )
+        try:
+            check_real_targets_under(source, sorted({*spec.files, *diff_paths(spec.diff)}))
+        except _ApplyFailed as failure:
+            events.add(
+                RunStep.PATCH_VERIFY,
+                "patch target rejected",
+                EventLevel.ERROR,
+                reason=failure.reason,
+            )
+            raise
+        originals: dict[str, str] = {}
+        for name in spec.files:
+            path = source / name
+            if not path.is_file():
+                events.add(
+                    RunStep.PATCH_VERIFY,
+                    "patch did not apply",
+                    EventLevel.ERROR,
+                    reason="TARGET_MISSING",
+                    file=name,
+                )
+                raise _ApplyFailed(FAILURE_PATCH_APPLY_FAILED, "TARGET_MISSING")
+            originals[name] = path.read_bytes().decode("utf-8")
+        try:
+            patched = apply_patch_to_files(originals, spec.diff)
+        except _ApplyFailed as failure:
+            events.add(
+                RunStep.PATCH_VERIFY, "patch did not apply", EventLevel.ERROR, reason=failure.reason
+            )
+            raise
+        if use_git:
+            self._service_commit(run, source, git_dir, f"base: {spec.repo}@{spec.source_commit}")
+        for name, text in patched.items():
+            (source / name).write_bytes(text.encode("utf-8"))
+        commit_sha: str | None = None
+        if use_git:
+            commit_sha = self._service_commit(
+                run, source, git_dir, f"apply: 승인된 패치 {spec.patch_id} 반영 (run {run.id})"
+            )
+        events.add(
+            RunStep.PATCH_VERIFY,
+            "patch applied",
+            files=sorted(patched),
+            appliedCommitSha=commit_sha,
+            committed=commit_sha is not None,
+            pushed=False,
+        )
+        flush()
+        docker_version, trivy_version = self._tool_versions()
+        if docker_version is None or trivy_version is None:
+            events.add(
+                RunStep.PATCH_VERIFY,
+                "image checks unavailable; not verified",
+                EventLevel.ERROR,
+                docker=docker_version,
+                trivy=trivy_version,
+                scenarioBuild=True,
+            )
+            raise _ApplyFailed(FAILURE_VERIFY_UNAVAILABLE, "TOOLS")
+        events.add(
+            RunStep.PATCH_VERIFY,
+            "build context ready",
+            sourceRepo=build.source_repo,
+            sourceCommit=build.source_commit,
+        )
+        flush()
+        self._build_scan_healthz(
+            run, source, build, workspace, events, flush, docker_version, trivy_version
+        )
+        return commit_sha
+
+    def _service_commit(self, run: ClaimedRun, tree: Path, git_dir: Path, message: str) -> str:
+        """작업 공간 밖 git 폴더로 `tree` 전체를 커밋하고 SHA 를 돌려준다(hook·서명 없음)."""
+        base = ["--git-dir", str(git_dir), "--work-tree", str(tree)]
+        if not git_dir.exists():
+            init = self._git(run, ["init", "--quiet", "--bare", str(git_dir)])
+            if init.returncode != 0:
+                raise _ApplyFailed(FAILURE_RUNNER_ERROR, "GIT_INIT")
+        self._git(run, [*base, "add", "--all", "--force", "--", "."])
+        committed = self._git(
+            run,
+            [
+                *base,
+                "-c",
+                f"user.name={COMMIT_AUTHOR_NAME}",
+                "-c",
+                f"user.email={COMMIT_AUTHOR_EMAIL}",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                f"core.hooksPath={os.devnull}",
+                "commit",
+                "--quiet",
+                "--no-verify",
+                "-m",
+                message,
+            ],
+        )
+        sha = self._git(run, [*base, "rev-parse", "HEAD"])
+        if committed.returncode != 0 or sha.returncode != 0:
+            raise _ApplyFailed(FAILURE_RUNNER_ERROR, "GIT_COMMIT")
+        return sha.stdout.strip()
+
     # -------------------------------------------------- ②③④ 빌드·스캔·healthz
 
     def _tool_versions(self) -> tuple[str | None, str | None]:
@@ -876,7 +1174,22 @@ class ApplyRunner:
             sourceCommit=build.source_commit,
         )
         flush()
+        self._build_scan_healthz(
+            run, source, build, workspace, events, flush, docker_version, trivy_version
+        )
 
+    def _build_scan_healthz(
+        self,
+        run: ClaimedRun,
+        source: Path,
+        build: ScenarioBuild,
+        workspace: _Workspace,
+        events: RunEventLog,
+        flush: Callable[[], None],
+        docker_version: str,
+        trivy_version: str,
+    ) -> None:
+        """빌드 문맥 `source` 를 이미지로 빌드 → Trivy(C-IMG-1 기준) → healthz. push 없음."""
         started = time.monotonic()
         built = self._run(
             [

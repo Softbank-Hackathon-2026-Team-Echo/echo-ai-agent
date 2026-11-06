@@ -403,49 +403,66 @@ def test_claim_does_not_add_diagnosis_by_default() -> None:
     assert "CHANGE_PROPOSAL" not in fake.calls[0][2]["capabilities"]
 
 
-def test_opt_in_runner_submits_diagnosis_without_precheck_findings() -> None:
+def _wired_runtime(monkeypatch: pytest.MonkeyPatch, fake: FakeWas) -> tuple[Any, Any]:
+    from echo_agent.diagnosis_runner import Diagnoser
+    from tests.test_diagnosis_runner import _fetcher, _snapshot
+
+    monkeypatch.setenv("ECHO_DIAGNOSIS", "on")
+    monkeypatch.setattr("echo_agent.diagnosis_runner.codeload_fetcher", _fetcher(BROKEN))
+    request = _snapshot(
+        failure={"logTail": ["app/static/index.html:5: SyntaxError: Unexpected token ';'"]}
+    )
+    run = replace(_claimed(fake), kind="CHANGE_PROPOSAL", input_snapshot=request)
+    return run, Diagnoser(DiagnosisModel(FakeModel().create), checker=Checks(BEFORE, PASS))
+
+
+def test_opt_in_runner_submits_diagnosis_without_precheck_findings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake = FakeWas(_routes())
-    run = replace(_claimed(fake), kind="CHANGE_PROPOSAL", input_snapshot=snapshot())
-    service = DiagnosisService(DiagnosisModel(FakeModel().create), Checks(BEFORE, PASS))
+    run, service = _wired_runtime(monkeypatch, fake)
     outcome = process_run(_client(fake), run, diagnoser=service, log=lambda _: None)
     assert outcome.submitted and outcome.status == "SUCCEEDED"
     result = fake.bodies("result")[0]
     assert result["diagnosis"]["fixable"] and result["patches"]
     assert result["diagnosis"]["result"] == "DIAGNOSED"
     assert result["diagnosis"]["category"] == "CODE"
+    assert result["diagnosis"]["evidence"][0]["line"] == 1
     assert "analysisStatus" not in result["diagnosis"]
     assert result["findings"] == [] and result["configDiff"] == []
 
 
-def test_invalid_projection_does_not_submit_or_crash_runner(
+def test_invalid_projection_cannot_submit_patch_or_lose_transfer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def reject(result: Any) -> Any:
+    def reject(result: Any, **kwargs: Any) -> Any:
         raise DiagnosisError("INVALID_DIAGNOSIS_STATE")
 
     monkeypatch.setattr("echo_agent.diagnosis_runner.to_was_result", reject)
     fake = FakeWas(_routes())
-    run = replace(_claimed(fake), kind="CHANGE_PROPOSAL", input_snapshot=snapshot())
-    service = DiagnosisService(DiagnosisModel(FakeModel().create), Checks(BEFORE, PASS))
+    run, service = _wired_runtime(monkeypatch, fake)
     outcome = process_run(_client(fake), run, diagnoser=service, log=lambda _: None)
-    assert not outcome.submitted and outcome.status == "FAILED"
+    assert outcome.submitted and outcome.status == "FAILED"
     assert outcome.failure_code == "INVALID_DIAGNOSIS_RESULT"
-    assert not fake.bodies("result")
+    result = fake.bodies("result")[0]
+    assert result["processing"]["externalTransferBytes"] > 0
+    assert result["patches"] == []
 
 
-def test_was_rejection_never_drops_diagnosis_or_retries_as_precheck() -> None:
+def test_was_rejection_never_drops_diagnosis_or_retries_as_precheck(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake = FakeWas(_routes(result=lambda p, b: fail(422, "RESULT_INVALID")))
-    run = replace(_claimed(fake), kind="CHANGE_PROPOSAL", input_snapshot=snapshot())
-    service = DiagnosisService(DiagnosisModel(FakeModel().create), Checks(BEFORE, PASS))
+    run, service = _wired_runtime(monkeypatch, fake)
     outcome = process_run(_client(fake), run, diagnoser=service, log=lambda _: None)
     assert not outcome.submitted
     assert len(fake.bodies("result")) == 1
     assert "diagnosis" in fake.bodies("result")[0]
 
 
-def test_opt_in_is_required_to_claim_change_proposal() -> None:
+def test_opt_in_is_required_to_claim_change_proposal(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeWas(_routes(**{"runs:claim": lambda p, b: ok({"run": None})}))
-    service = DiagnosisService(DiagnosisModel(FakeModel().create), Checks(PASS))
+    _, service = _wired_runtime(monkeypatch, FakeWas(_routes()))
     run_loop(
         _client(fake),
         "test",
@@ -457,8 +474,17 @@ def test_opt_in_is_required_to_claim_change_proposal() -> None:
     assert "CHANGE_PROPOSAL" in fake.calls[0][2]["capabilities"]
 
 
-def test_no_model_flag_cannot_start_diagnosis() -> None:
-    assert main(["--diagnose", "--no-model"]) == 2
+def test_no_model_flag_keeps_diagnosis_rules_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ECHO_DIAGNOSIS", "on")
+    monkeypatch.setenv("ECHO_WAS_URL", "https://api.example.test")
+    monkeypatch.setenv("ECHO_RUNNER_TOKEN", "echo_rnr_" + "r" * 32)
+
+    def run(*args: Any, **kwargs: Any) -> int:
+        assert kwargs["diagnoser"].model is None and kwargs["reviewer"] is None
+        return 0
+
+    monkeypatch.setattr("echo_agent.precheck_runner.run_loop", run)
+    assert main(["--once", "--no-model"]) == 0
 
 
 async def test_expired_empty_request_cannot_succeed() -> None:

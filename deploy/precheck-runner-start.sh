@@ -39,11 +39,7 @@ esac
 
 case "${ECHO_DIAGNOSIS:-off}" in
   on)
-    if [ "$use_model" != 1 ]; then
-      echo "ECHO_DIAGNOSIS requires ECHO_PRECHECK_MODEL=on" >&2
-      exit 2
-    fi
-    args+=(--diagnose)
+    export ECHO_DIAGNOSIS=on
     ;;
   off) ;;
   *)

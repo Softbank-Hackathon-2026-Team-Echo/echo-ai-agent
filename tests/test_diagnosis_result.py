@@ -1,4 +1,4 @@
-"""WAS #98's published fields; not a substitute for the unpublished server validator."""
+"""Internal/public projection tests; runtime tail coordinates are covered by runner tests."""
 
 import copy
 import json

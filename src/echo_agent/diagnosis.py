@@ -16,6 +16,7 @@ from echo_agent.diagnosis_input import (
     DiagnosisInput,
     Evidence,
     prepare_evidence,
+    redact,
 )
 from echo_agent.diagnosis_model import PROMPT_VERSION, DiagnosisModel, validate_answer
 from echo_agent.events import RunEventLog, RunStep
@@ -252,6 +253,8 @@ class DiagnosisService:
                     if request.source is None:
                         raise DiagnosisError("INPUT_INVALID")
                     diff = unified_diff(request.source, answer.patched)
+                    if redact(diff) != diff:
+                        raise DiagnosisError("PATCH_CONTAINS_SECRET")
                     digest = hashlib.sha256(diff.encode()).hexdigest()
                     result["patches"] = [
                         {

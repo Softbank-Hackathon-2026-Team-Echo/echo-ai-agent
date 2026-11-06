@@ -1,7 +1,7 @@
 """Project validated internal diagnosis to the public WAS #98 result vocabulary.
 
-The server's api-98 runner spec is not published yet. Unknown category/log line stay
-null in this preview; their nullability must be confirmed before operational opt-in.
+WAS #101 uses one-based offsets in failure.logTail. The runtime adapter selects that
+mode explicitly; standalone artifacts can retain original log-file coordinates.
 Deployment/environment/commit IDs belong to the server-owned run association, not model output.
 """
 
@@ -36,19 +36,26 @@ def _text(value: Any) -> str:
     return redact(text_field(value))
 
 
-def _evidence(diagnosis: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _evidence(diagnosis: Mapping[str, Any], *, log_tail: bool = False) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     for field, kind in (("evidence", "LOG"), ("sourceEvidence", "FILE")):
         for item in diagnosis.get(field, []):
-            # A captured log-tail offset or EV id is NOT an original log-file line.
             line = item.get("sourceLine") if kind == "LOG" else item.get("line")
+            if kind == "LOG" and log_tail:
+                # Locally generated checker logs are not rows of WAS's logTail.
+                if item.get("chunkId") != "container-tail":
+                    continue
+                line = item.get("chunkLine")
+                if type(line) is not int or not 1 <= line <= 50:
+                    raise DiagnosisError("INVALID_EVIDENCE")
             if line is not None and (type(line) is not int or line < 1):
                 raise DiagnosisError("INVALID_EVIDENCE")
             content = redact(text_field(item["text"], limit=MAX_SOURCE_BYTES, empty=True))
             if not content.strip():
                 continue
-            if len(content) > 2000:
-                content = content[:1999] + "…"
+            limit = 300 if log_tail else 2000
+            if len(content) > limit:
+                content = content[: limit - 1] + "…"
             evidence = {"source": kind, "line": line, "text": content}
             if kind == "FILE":
                 if item.get("path") != ALLOWED_FILE or line is None:
@@ -56,10 +63,10 @@ def _evidence(diagnosis: Mapping[str, Any]) -> list[dict[str, Any]]:
                 evidence["path"] = ALLOWED_FILE
             if evidence not in output:
                 output.append(evidence)
-    return output
+    return output[:20] if log_tail else output
 
 
-def to_was_result(internal: Mapping[str, Any]) -> dict[str, Any]:
+def to_was_result(internal: Mapping[str, Any], *, log_tail: bool = False) -> dict[str, Any]:
     """Keep runner common fields/patches unchanged; send only public diagnosis fields.
 
     Verification traces, source hashes and EV/SC IDs remain in the local result artifact.
@@ -111,6 +118,6 @@ def to_was_result(internal: Mapping[str, Any]) -> dict[str, Any]:
         "cause": _text(diagnosis["summary"]),
         "fixable": fixable,
         "unfixableReason": None if fixable else _text(reason),
-        "evidence": [] if failed else _evidence(diagnosis),
+        "evidence": [] if failed else _evidence(diagnosis, log_tail=log_tail),
     }
     return result

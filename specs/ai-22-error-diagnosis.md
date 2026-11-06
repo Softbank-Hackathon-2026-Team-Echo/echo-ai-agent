@@ -1,117 +1,76 @@
-# #22 오류 진단·실제 diff 생성 — v1
+# #22 오류 진단·수정 — WAS #101 통합
 
-상태: **앞단 구현·실제 GCP 검증 완료 / WAS #98 공개 결과 필드 반영 / 상세 runner 명세·통합 대기 / 운영 수신 기본 off** (2026-11-07)
+상태: **#25 연결 구조 + #24 진단 엔진 통합·단독 검증 완료 / 운영 수신 기본 off / 실제 WAS·승인·재배포 종단 확인 남음** (2026-11-07)
 
-- 요청: [echo-ai-agent #22](https://github.com/Softbank-Hackathon-2026-Team-Echo/echo-ai-agent/issues/22)
-- 분담·계약 제안: [댓글](https://github.com/Softbank-Hackathon-2026-Team-Echo/echo-ai-agent/issues/22#issuecomment-6688870908)
-- 참고: `2026-softbank-1/iris-error-check-agent` `3f3b4d956282899362b30439d02788d329bd3594`의 전처리·근거 ID·진단 상태. 소스 코드는 복사하지 않았으며 그래프·IRIS·별도 HTTP 서버를 도입하지 않는다.
+- 요청: [AI #22](https://github.com/Softbank-Hackathon-2026-Team-Echo/echo-ai-agent/issues/22)
+- 기반: #24 `ed5f399`, #25 `ec809b3`. #25 작성자의 원래 커밋을 병합해 연결·반영 골격을 재사용했다.
+- 서버 기준: [WAS #101](https://github.com/Softbank-Hackathon-2026-Team-Echo/echo-was/pull/101) 최종 head `62dfe5e` (병합됨). `docs/api/deploy-diagnosis.md`의 러너 계약.
+- 진단·diff는 형래, WAS 작업 생성·실패 로그 제공·저장소 반영/PR·수정 커밋 재배포는 지민 담당 분담을 유지한다.
 
-## 1. 범위와 실행
+## 1. 현재 실행 경로
 
-실패 로그·실패 커밋의 전체 HTML → 비밀값 마스킹·EV/SC 근거 → Claude 진단·정확한 문자열 변경 제안 → Python 원본 대조·diff → 격리된 Node 문법 검사.
-
-- v1은 `app/static/index.html`의 기존 classic inline JavaScript만 고친다. HTML 구조·외부 스크립트·module script·다른 파일은 수정하지 않는다.
-- SDK·기존 모델 설정·GCP VM·DockerSandbox 재사용. Node 24 공식 이미지의 2026-11-07 조회 digest를 코드에 고정한다. VM/유닛 교체·테스트 DB·Vertex 전환 없음.
-- 모델은 명령을 고르거나 실행하지 않는다. Node `vm.Script`는 파싱만 하고 실행 메서드를 호출하지 않는다. 컨테이너는 기존 network none/read-only/non-root/자원 상한을 따른다.
-- 모델 호출 최대 2회(자동 SDK 재시도 0), 호출당 최대 60초, 작업 예산 기본 180초. 두 번째 호출은 유효한 수정의 문법 검사 실패 때만 허용하며 원본 소스에 대한 수정안을 다시 받는다. 시간 초과 뒤에도 생성 중인 컨테이너/프로세스 정리는 완료하며, 이 정리 시간은 작업 예산을 넘길 수 있다(기존 Docker 생성 120초/삭제 60초 제한).
-- 문법 검사는 화면 기능·API·DB·빌드·Trivy·헬스체크를 대신하지 않는다. 이 앞단 결과를 실제 배포 완료로 표시하지 않는다.
-
-## 2. 제안 계약 — 기존 WAS가 아직 받는다고 가정하지 않는다
-
-작업은 기존 DB에 정의된 `CHANGE_PROPOSAL`을 활성화하는 안이다. 현재 WAS는 이 종류를 claim/상세/승인에 열지 않았으므로 지민 담당 변경이 선행되어야 한다. 기존 `PRECHECK`로 대체하지 않는다(C-AI-1 증거 혼입 방지).
-
-`inputSnapshot`:
-
-```json
-{
-  "schemaVersion": 1,
-  "purpose": "error-diagnosis.v1",
-  "deployRequestId": "failed-deploy-id",
-  "environment": "aws-tokyo",
-  "sourceCommit": "1111111111111111111111111111111111111111",
-  "simulated": true,
-  "allowedFiles": ["app/static/index.html"],
-  "sourceFiles": [{"path": "app/static/index.html", "content": "실패 커밋의 전체 파일"}],
-  "failure": {"code": "BUILD_FAILED", "exitCode": 1},
-  "logs": [{"id": "build", "stage": "build", "sourceLineStart": null,
-            "truncated": false, "lines": ["app/static/index.html:5: SyntaxError: …"]}]
-}
+```text
+CHANGE_PROPOSAL claim → 하트비트
+→ WAS 입력 확인 → 공개 GitHub의 실패 commitSha 소스 조회
+→ 민감 파일 제외·로그/소스 비밀값 가림
+→ 기존 #24 엔진: 원본 문법 검사 → Claude 근거·수정 제안 → 수정본 문법 검사
+→ diff/비밀값 검사 → git apply 확인·정규화 → 엄격한 적용기 결과 대조
+→ WAS diagnosis + origin=AI patch + processing 제출 → 임시 작업 공간 정리
 ```
 
-위 커밋은 문서용 더미이며 실배포 입력에서는 정확한 40자리 SHA가 필요하다. 소스가 없을 때만 `sourceCommit=null`, `sourceFiles=[]`를 허용하며 패치하지 않는다. 소스는 한 파일·UTF-8 64 KiB, 본문은 기존 러너와 같이 1 MiB 이하다. 로그는 최대 5묶음×200줄×2,000자, 한 항목은 실제 한 줄이다. `stage`는 build/runtime/validation이다. tail의 원래 줄 번호를 모르면 null로 유지한다.
+- 자동 수정은 `app/static/index.html`의 기존 classic inline JavaScript에 한정한다. 해당 파일·줄을 가리키는 실패 로그가 있을 때 그 커밋의 전체 HTML을 제공한다. 다른 언어·파일은 현재 자동 수정 범위가 아니다. 소스가 없거나 지원 대상이 아니어도 로그 기반 진단은 가능하며 검증하지 못한 패치는 반환하지 않는다.
+- 모델 호출 최대 2회, SDK 재시도 0, 엔진 예산 최대 180초. 수정본 문법 실패 때만 원본 기준으로 재시도한다. Node 공식 고정 digest·Docker network none/read-only/non-root/자원 상한을 재사용하고 고객 JavaScript는 실행하지 않는다.
+- `fixable=true`는 원본 문법 FAIL → 수정본 PASS, 허용된 변경 범위·근거·최종 diff 검사까지 만족해야 한다. 실제 화면/API/DB 정상이나 배포 완료를 뜻하지 않는다.
+- `--no-model`은 마스킹된 로그/위치 규칙만 사용하고 패치를 만들지 않는다. 모델 거절·API 실패는 코드별 FAILED이며 전송 기록은 남긴다.
 
-WAS #97의 `failure.{code,message,containerReason,terminationReason,exitCode,logTail,logTruncated}`를 받을 수 있다. 별도 `logs`가 없으면 logTail을 runtime 로그로 변환한다. **#97은 컨테이너 로그 수집이다. 이번 프론트 문법 실패는 빌드 검사 로그를 추가 전달해야 한다.** 이미지가 없는 빌드 실패를 지원하고 digest를 요구하지 않는다.
+## 2. 실제 WAS 계약과 내부 입력의 구분
 
-결과는 기존 `RunResult` 공통 칸에 선택 `diagnosis`를 추가한다. **WAS 제출용 결과와 로컬 검증 기록을 구분**한다. [WAS #98 §3](https://github.com/Softbank-Hackathon-2026-Team-Echo/echo-was/issues/98) 및 지민님의 필드 지정 답변에 맞춘 제출용 변환은 다음과 같다:
+외부 `inputSnapshot`은 WAS #101의 `schemaVersion`, `service`, `deployRequest`, `environment`, `variableKeys`, `failure`다. `deployRequest.repo`(owner/name)·`commitSha`(40자리)로 러너가 소스를 읽는다. `failure.logTail`은 최대 50줄이다. 줄 번호를 유지하기 위해 초과/여러 줄 원소는 거절한다. 비공개 저장소용 자격은 사용하지 않는다.
 
-| 제출 필드 | 의미와 변환 |
-|---|---|
-| `result` | 내부 analysisStatus를 `DIAGNOSED` / `INSUFFICIENT_EVIDENCE` / `NO_FAILURE_EVIDENCE`로 변환 |
-| `category` | 근거에 따라 `CODE` / `CONFIG` / `BUILD` / `RUNTIME` / `PLATFORM`. 분류 근거가 없으면 null |
-| `cause` | 한국어 진단 summary |
-| `fixable` | CODE 진단이고 실제 원본 문법 FAIL·수정본 PASS·패치 생성까지 확인한 경우에만 true |
-| `unfixableReason` | 수정할 수 없거나 검증하지 못한 이유. fixable=true일 때 null |
-| `evidence` | 로그는 `source=LOG`, 소스는 `source=FILE`. `line`, `text`, FILE의 `path`를 제공 |
+`diagnosis_runner.Diagnoser`가 이를 #24 내부 `error-diagnosis.v1` 입력으로 변환한다. 내부 입력은 로컬 CLI/fixture에서 계속 사용하지만 WAS가 이 내부 형식을 직접 보내야 하는 것이 아니다. 내부 sourceCommit/hash는 소스 바인딩 기록이며 운영 경로의 바이트는 해당 커밋 URL에서 가져온다.
 
-- 모델에 category를 요청하고 허용 enum·진단 상태와의 일관성을 코드로 검사한다. 모델/API 실패는 완료된 원인 분석으로 표시하지 않고 작업 FAILED·INSUFFICIENT_EVIDENCE로 반환한다.
-- LOG의 원래 줄 번호가 없으면 `line=null`이다. tail 안의 순번이나 오류 메시지에 표시된 **코드** 줄 번호를 **로그** 줄 번호로 바꾸지 않는다. FILE의 줄 번호는 전달된 소스의 실제 줄 번호다.
-- `diagnosis_result.to_was_result`가 제출용 6개 필드만 만든다. 상세 검증·근거 ID·바인딩 기록은 로컬 `result.json`에 보존한다. 변환 후 결과는 `was-result.json`으로 함께 저장한다.
-- 로컬 `diagnosis`: analysisStatus, category, summary, evidenceIds/sourceEvidenceIds, canFix, reason, limitations, 인용한 evidence/sourceEvidence, verification.before/after.
-- 로컬 `diagnosis.inputBinding`: deployRequestId, sourceCommit, sourceSha256, commitVerification=`caller_supplied`. WAS가 해당 커밋에서 가져온 바이트라는 책임을 진다. 러너는 GitHub 인증·조회·커밋 검증을 임의로 하지 않는다.
-- `patches`: 기존 `{id,patchHash,files,diff,reason,touchesProtectedFiles,checks,origin}` 유지. files/diff 경로는 **고객 저장소 기준 `app/static/index.html`**이다. origin=AI. checks는 DIFF_APPLIES/POLICY/JAVASCRIPT_SYNTAX뿐이며 빌드·스캔 통과를 꾸미지 않는다.
-- `processing`: 실제 시도한 모델 요청의 LOGS/SOURCE_CODE와 전송량 추정치를 기록. 거절/실패에도 보존. 모델 호출은 컨테이너 밖이므로 sandbox=false, Anthropic 직접 호출이라 modelRegion=null이다. 로컬 CLI는 local/development, VM 러너는 기존 gcp/asia-northeast3로 기록한다.
-- 유효한 근거 부족·수정 불가 진단도 작업 자체는 SUCCEEDED이고 patches는 비어 있다. 모델/입력/검증 계약 오류는 FAILED다. 이전의 유효하지 않은 패치는 반환하지 않는다.
+결과는 기존 RunResult + `diagnosis{result,category,cause,fixable,unfixableReason,evidence}`와 기존 patches 형식이다.
 
-**미확정 계약:** 확인 시점 WAS main `30aca36`에 예정된 `specs/api-98-failed-deploy-diagnosis.md`는 없다. #98 §3은 화면 조회 결과 예시이므로 이 변환만으로 실제 runner 제출 스키마 호환을 보장하지 않는다. 다음은 상세 명세에서 확인할 항목이다:
+- `result`: DIAGNOSED / INSUFFICIENT_EVIDENCE / NO_FAILURE_EVIDENCE.
+- `category`: CODE / CONFIG / BUILD / RUNTIME / PLATFORM, 근거 부족이면 null.
+- **운영 LOG.line은 failure.logTail의 1부터 위치**, FILE.line은 파일의 실제 줄이다. 내부 문법 검사기가 생성한 로그는 logTail에 있었던 것처럼 번호를 붙여 제출하지 않는다. evidence 최대 20개, 각 text 최대 300자로 정리한다.
+- deployRequestId/environmentId/sourceCommitSha는 WAS가 붙인다. 러너 diagnosis에 중복 제출하지 않는다.
+- patch checks: DIFF_APPLIES / POLICY / JAVASCRIPT_SYNTAX / GIT_APPLY. 빌드·Trivy·healthz는 승인 이후 별도 실행이다.
+- processing은 실제 모델 전송을 기록하며 실패·거절·결과 변환 실패에도 보존한다. Anthropic 직접 호출이므로 modelRegion=null. 운영 제어 프로세스는 gcp/asia-northeast3, 로컬 검증은 local/development다.
+- CHANGE_PROPOSAL은 PRECHECK/C-AI-1 증거로 제출하지 않는다. WAS가 422로 거절하면 필드를 지우거나 PRECHECK로 재전송하지 않는다.
+- 로컬 CLI의 `--was-result`는 같은 공개 필드 모양을 출력한다. CLI는 자체 입력 로그의 원본 좌표를 유지하며, logTail 좌표 변환은 운영 어댑터가 명시적으로 선택한다.
 
-1. 근거가 없는 category와 원본 줄 번호를 모르는 LOG.line의 null 허용 여부. 확인 전에 임의의 분류나 줄 번호를 채우지 않는다.
-2. 상세 조회의 deployRequestId/environmentId/sourceCommitSha를 WAS의 작업 연관 정보에서 붙이는지, runner 결과에도 요구하는지. 현재는 제출용 diagnosis에 넣지 않으며 환경 이름으로 environmentId를 추측하지 않는다.
-3. 정확한 실패 소스 전달 방식, 기존 공통 결과 필드·processing 수신, 내부 검증 기록의 서버 저장 위치. 현재 inputSnapshot은 위 제안 형태를 유지한다.
+## 3. 비밀값·소스 보호
 
-WAS가 모르는 결과를 422로 거절하면 결과를 벗기거나 PRECHECK로 재전송하지 않는다. 잘못된 내부 진단 변환도 제출하지 않고 로컬 `INVALID_DIAGNOSIS_RESULT`로 기록하며 폴링 프로세스를 유지한다. 이 경우 서버 작업 완료가 아니라 lease 만료/복구 대상이다. 자동 진단 수신은 운영에서 켜지 않는다.
+- `.env`, 숨김 경로, 키/credentials/service-account 파일 등을 읽기 전에 제외한다. 심볼릭 링크·루트 밖 경로를 제외하고 선택 파일 100개·파일당 64 KiB·선택 총량 512 KiB·탐색 5,000개 상한을 둔다.
+- 기존 토큰 패턴 외에 password/secret/token/API key 할당, 인증 헤더·쿠키와 잔여 고엔트로피 후보도 전송 전에 가린다. 패턴 기반이므로 모든 비밀값 탐지를 보증하지 않는다.
+- 원본에 마스킹이 필요한 내용이 있으면 자동 패치를 보류한다. 모델 diff와 원본 문맥에서 재생성한 최종 diff도 재검사하며, 가려야 할 값이 있으면 반환하지 않는다. 적용용 diff의 문맥만 `***`로 바꿔 무결성 검사를 우회하지 않는다.
+- 공개 archive는 압축 크기 50 MiB, 확장 크기 128 MiB·10,000개 상한이다. 링크·특수 엔트리를 거절하고 tar data filter로 추출한다.
+- 모델 원문/API 오류 본문·키는 이벤트/결과에 쓰지 않는다. 동작 정지·리스 상실은 다음 작업 경계에서 확인하고 임시 파일·검사 컨테이너를 정리한다.
 
-## 3. 근거·수정 검증
+## 4. 승인 이후와 활성화
 
-- 마스킹은 여러 줄 비밀의 줄 수를 보존한다. 알려진 토큰/접속 문자열/인증 값/비밀 필드와 고엔트로피 후보를 외부 전송 전에 가린다. 휴리스틱이므로 WAS 수집 단계 마스킹도 유지한다.
-- 소스에 마스킹할 내용이 있으면 가린 내용을 진단에만 사용하고 해당 원본의 수정은 금지한다.
-- 입력은 지시가 아니라 자료라고 system prompt에 고정한다. 로그/소스 원문을 이벤트에 남기지 않는다.
-- 모든 인용 ID의 존재, 수정 대상 줄과 SC 근거의 대응, 정확한 oldText 1회 일치, 변경 구간 비중첩을 코드로 검사한다.
-- 모델의 수정 문자열을 원본에 적용하고 Python이 unified diff와 SHA-256을 생성한다. 모델이 임의의 patchHash/경로/검사 결과를 만들 수 없다.
-- 원본에서 문법 오류를 재현하지 못했거나 검사 도구를 쓸 수 없으면 패치하지 않는다. 수정본은 같은 검사에 통과해야 한다. 실패 시 최대 한 번 보완한 뒤 패치 없이 사유를 반환한다.
-- 일치하는 근거 ID만으로 원인의 의미적 정확성이나 런타임 정상 동작을 보장하지 않는다.
+#25의 서비스 저장소 APPLY_PATCH 모드를 재사용한다: 승인된 patchHash 확인 → 실패 커밋 소스 → 엄격 적용 → 로컬 커밋 → Docker build → Trivy → healthz. 민감 경로·비밀값을 포함한 서비스 패치도 거절한다. 사전 점검의 기존 scenarios 경로는 유지한다.
 
-## 4. 로컬 확인 / 빌드에서 재사용
+러너는 push·PR 생성·실제 배포를 하지 않는다. appliedCommitSha는 샌드박스의 로컬 커밋이며 저장소 반영/재배포 완료가 아니다. echo-demo-app의 build/healthz 값은 #25의 기존 상수다. 실제 서비스의 DB 연결·기능 검증은 별도다.
 
-모델 없이 실문법 검사를 확인한다(원본 명령 exit=1, 수정본 exit=0):
+`ECHO_DIAGNOSIS=off`가 기본. on이면 CHANGE_PROPOSAL을 claim한다(`--diagnose` 별칭도 제공). ECHO_PRECHECK_MODEL=off면 규칙만 사용한다. 승인 후 검증에는 ECHO_APPLY_PATCH=on도 필요하다. 운영 release·서버 설정을 실제로 맞추고 켜는 것은 별도 배포 작업이다.
 
-```bash
-uv run python -m echo_agent.diagnosis_cli check --source tests/fixtures/diagnosis/broken.html --local-node
-uv run python -m echo_agent.diagnosis_cli check --source tests/fixtures/diagnosis/fixed.html --local-node
-```
+## 5. 직접 검증과 남은 인수
 
-`--local-node`는 CI에 설치된 Node로 고정 파서만 실행하는 명시적 옵션이다. 생략하면 Docker다. 실제 진단 서비스는 이 옵션으로 자동 전환하지 않는다.
+- 전체 **431 passed**, skip 0. Ruff lint/format·mypy·시작 스크립트 문법 검사 통과. 실제 Docker 회귀 포함.
+- 공개 demo-app의 고정 커밋 `d856a1d`을 실제 GitHub에서 받아 제한된 소스 30개와 HTML 368행을 읽었다. sdist/wheel 빌드 및 진단 모듈·Node 검사기 포함 확인.
+- WAS #101 최종 head `62dfe5e`의 DiagnosisRunResultRequest와 정규화로 정상 패치·규칙만·거절·로그 없음·근거 부족·입력 오류 6개 결과를 확인. 정상 패치는 PROPOSED다. 실제 HTTP/DB 제출 시험은 아니다.
+- 최신 통합 어댑터에 합성 실패 커밋과 실제 Node 오류 로그를 넣어 Claude 1회 **7.677초**, 전체 진단/검증 **9.626초**. 수정본은 정상 원본과 일치, LOG.line=1·FILE.line=160, 최종 실제 결과도 WAS 스키마/정규화 통과. network none·read-only·비루트, 컨테이너 잔존 0.
+- 이 검증은 로컬 제어 프로세스 + Docker + Anthropic API다. 소스 전달은 합성 로컬 Git 객체 reader를 주입했다. 실제 GitHub→운영 WAS 요청·사람 승인·고객 앱 빌드/Trivy/healthz·수정 커밋 재배포 전체를 검증한 것이 아니다.
+- [통합 실행 증거](evidence/ai-22-was101-integration-2026-11-07.json).
+- 남음: 실제 배포 실패(프론트 문법 검사 로그 포함)가 WAS 입력으로 전달되는지, 운영 러너 배포/스위치, 화면·승인, WAS 저장소 반영·수정 커밋 재배포 확인. 본 변경은 DB 네트워크·Vertex·운영 자원을 변경하지 않는다.
 
-Docker 이미지 사전 준비와 전체 앞단 재생(모델 API 호출 없음):
+## 6. 과거 단독 검증 기록
 
-```bash
-docker pull node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9
-uv run python -m echo_agent.diagnosis_cli diagnose \
-  --input tests/fixtures/diagnosis/request.json \
-  --model-response tests/fixtures/diagnosis/model-response.json
-```
+아래는 이전 커밋 시점의 이력이다. 계약의 현재 상태는 위 1~5절을 따른다.
 
-fixture의 소스·커밋·로그와 모델 답은 합성 자료다. 재생 결과는 항상 simulated=true, model=null, processing 없음이다. 실제 Node 검사를 사용하지만 실제 Claude 품질이나 운영 통합 성공의 증거는 아니다. `--model-response`를 생략하면 ANTHROPIC_API_KEY가 필요하고 실제 과금 호출이 발생한다. CLI는 결과 JSON만 출력하며 저장·배포·PR 생성을 하지 않는다. `--was-result`를 더하면 로컬 상세 기록 대신 #98 제출용 필드로 변환한 결과를 출력한다.
-
-## 5. 통합 전 인수 조건과 되돌리기
-
-1. 지민: CHANGE_PROPOSAL 작업 생성·claim·결과·상세/승인 계약, 정확한 실패 소스 전달, diagnosis 응답 확장.
-2. WAS/데모 앱: 동일한 문법 검사를 빌드에 연결하고 그 실패 로그를 제공. 현재 앱은 정적 HTML이라 /healthz로 프론트 문법 오류를 잡을 수 없다.
-3. 후단: 현재 echo-ai-agent scenarios/ 고정 경로와 고정 커밋만 받는 APPLY_PATCH에 이번 고객 파일/커밋을 연결. 앞단은 후단 허용 목록을 해제하지 않는다.
-4. 화면: 진단·문법 검사·샌드박스 검증·실제 재배포 상태를 구분. 저장소 반영/재배포는 지민 담당이며 현재 이 변경에는 없다.
-
-위 계약이 배포·통합 검증된 뒤에만 `ECHO_DIAGNOSIS=on` 또는 `--diagnose`로 활성화한다. 기본 off, --no-model과 동시 사용 금지. 끄면 CHANGE_PROPOSAL을 claim하지 않고 기존 PRECHECK/APPLY_PATCH만 처리한다. 이 변경은 운영 VM 설정을 바꾸지 않는다.
-
-## 6. 확인 기록 (2026-11-07)
+ (2026-11-07)
 
 - 전체 pytest 354개 통과(실제 Docker 시험 포함, skip 0), ruff lint/format·mypy 통과.
 - CLI fixture 재생: 원본 문법 실패 → 수정본 통과 → 패치 1개. simulated=true, 실제 모델 호출 없음.

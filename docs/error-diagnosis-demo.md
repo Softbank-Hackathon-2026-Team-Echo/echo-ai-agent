@@ -48,7 +48,7 @@ ECHO_GCP_PROJECT=team-echo-final bash deploy/diagnosis-demo.sh \
 
 `simulated=true`는 실제 배포 실패가 아닌 **인위적인 오류 입력**이라는 뜻이다. 실제 호출 여부는 `summary.mode=live`, `realModelCalls`, `result.model/processing`으로 구분한다. 재생은 모델·외부 전송 기록이 없다.
 
-`was-result.json`은 `result/category/cause/fixable/unfixableReason/evidence`와 기존 AI 패치를 포함한다. 분류 근거나 원본 로그 줄 번호가 없으면 null로 두므로, 아직 공개되지 않은 WAS 상세 명세에서 null 허용 및 작업 ID 연결 방식을 확인한 뒤 운영 수신을 켜야 한다. 일반 진단 CLI에서도 `diagnose --was-result`로 같은 변환을 사용할 수 있다.
+`was-result.json`은 `result/category/cause/fixable/unfixableReason/evidence`와 기존 AI 패치를 포함한다. 이 CLI는 독립 합성 입력이므로 원본 로그 번호가 없으면 null이다. 운영 어댑터는 WAS #101 입력을 받아 LOG.line을 logTail의 1부터 번호로 변환한다. 최신 WAS 스키마·정규화 통과와 실제 서버 HTTP/승인/재배포 검증은 구분한다. 통합 현황은 [현재 명세](../specs/ai-22-error-diagnosis.md)를 따른다.
 
 ## GCP VM에서 일회성 검증
 

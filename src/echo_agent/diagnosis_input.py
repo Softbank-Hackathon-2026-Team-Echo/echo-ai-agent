@@ -1,4 +1,4 @@
-"""#22 앞단 입력과 근거. WAS와 협의 중인 error-diagnosis.v1 계약."""
+"""#22 내부 입력과 근거. WAS #101 입력은 diagnosis_runner에서 변환한다."""
 
 import hashlib
 import json
@@ -23,6 +23,28 @@ _SECRET_VALUE = re.compile(
     r"(?:\"[^\"\n]*\"|'[^'\n]*'|[^\s,;}]+)"
 )
 _AUTH_LINE = re.compile(r"(?im)\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*:[^\n]*")
+
+
+def sensitive_source_path(path: str) -> bool:
+    """Exclude credential files and hidden paths before collecting source evidence."""
+    parts = path.replace("\\", "/").lower().split("/")
+    return any(
+        not part
+        or part.startswith(".")
+        or any(
+            word in part
+            for word in (
+                "credential",
+                "secret",
+                "private_key",
+                "service-account",
+                "service_account",
+            )
+        )
+        or part.endswith((".pem", ".key", ".p12", ".pfx", ".keystore"))
+        or part in {"id_rsa", "id_ed25519", "node_modules", "vendor", "__pycache__"}
+        for part in parts
+    )
 
 
 class DiagnosisError(Exception):
