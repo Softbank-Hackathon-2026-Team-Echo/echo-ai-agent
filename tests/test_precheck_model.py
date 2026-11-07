@@ -598,7 +598,7 @@ def _snapshot_with_source_config(**config: Any) -> dict[str, Any]:
     raw = _snapshot()
     raw["source"]["config"] = {"region": "ap-northeast-1", **config}
     raw["target"]["config"] = {
-        "projectId": "echo-prod",
+        "projectId": "example-project",
         "region": "asia-northeast3",
         "clusterName": "echo-gke",
     }
@@ -674,15 +674,15 @@ def test_secret_candidate_is_counted_in_keys_and_lists_too() -> None:
     "value",
     [
         "sha256:" + "0123456789abcdef" * 4,  # 이미지 digest
-        "asia-northeast3-docker.pkg.dev/echo-prod/echo/shop@sha256:" + "fedcba9876543210" * 4,
+        "asia-northeast3-docker.pkg.dev/example-project/echo/shop@sha256:" + "fedcba9876543210" * 4,
         "0123456789abcdef" * 4,  # 접두어 없는 sha256
         "0123456789abcdef01234567" + "89abcdef01234567",  # git 커밋 40자리
         "86df11bc-3a26-4d69-b935-1b2ad9a74be0",  # UUID
-        "projects/echo-prod/locations/asia-northeast3/clusters/echo-gke-autopilot-2026",
+        "projects/example-project/locations/asia-northeast3/clusters/echo-gke-autopilot-2026",
         "/var/lib/echo-agent/cache/trivy-db/2026-11-06/metadata.json",
         "arn:aws:eks:ap-northeast-1:123456789012:cluster/echo-eks-production-cluster",
         "DATABASE_URL_FOR_PRIMARY_REPLICA_2_READ_ONLY",
-        "echo-runner@echo-prod-123456.iam.gserviceaccount.com",
+        "echo-runner@example-project.iam.gserviceaccount.com",
         "Basic authentication is enabled for the internal dashboard",
         "disk-encryption-enabled-for-all-volumes",
         "2026-11-06T10:00:00.123456789+09:00",
