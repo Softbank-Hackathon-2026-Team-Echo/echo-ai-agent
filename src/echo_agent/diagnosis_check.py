@@ -1,4 +1,4 @@
-"""Fixed, parse-only JavaScript check in the existing isolated Docker workspace."""
+"""Fixed, parse-only JS/Python checks in the existing isolated Docker workspace."""
 
 import asyncio
 import json
@@ -9,8 +9,14 @@ from html.parser import HTMLParser
 from importlib.resources import files
 from typing import Any
 
-from echo_agent.diagnosis_input import ALLOWED_FILE, DiagnosisError, redact
-from echo_agent.sandbox import DockerSandbox, SandboxError
+from echo_agent.diagnosis_input import (
+    ALLOWED_FILE,
+    PYTHON_FILE,
+    REPAIR_FILES,
+    DiagnosisError,
+    redact,
+)
+from echo_agent.sandbox import WORKSPACE_IMAGE, DockerSandbox, SandboxError
 
 # Official multi-architecture Node 24 bookworm-slim, resolved 2026-11-07.
 NODE_IMAGE = (
@@ -105,13 +111,14 @@ class CheckResult:
         }
 
 
-def parse_check(code: int, output: str) -> CheckResult:
+def parse_check(code: int, output: str, path: str = ALLOWED_FILE) -> CheckResult:
     try:
         raw = json.loads(output)
         version, issues = raw["version"], raw["issues"]
         if (
-            not isinstance(version, str)
-            or not version.startswith("v")
+            path not in REPAIR_FILES
+            or not isinstance(version, str)
+            or not version.startswith("Python 3.13." if path == PYTHON_FILE else "v")
             or not isinstance(issues, list)
             or len(issues) > 10
         ):
@@ -119,7 +126,7 @@ def parse_check(code: int, output: str) -> CheckResult:
         cleaned = []
         for issue in issues:
             if (
-                issue["path"] != ALLOWED_FILE
+                issue["path"] != path
                 or type(issue["line"]) is not int
                 or issue["line"] < 1
                 or not isinstance(issue["message"], str)
@@ -127,7 +134,7 @@ def parse_check(code: int, output: str) -> CheckResult:
                 raise ValueError
             cleaned.append(
                 {
-                    "path": ALLOWED_FILE,
+                    "path": path,
                     "line": issue["line"],
                     "message": redact(issue["message"])[:300],
                 }
@@ -148,11 +155,19 @@ class SyntaxSandbox(DockerSandbox):
 
 
 class DockerSyntaxChecker:
-    def __init__(self, factory: Callable[..., DockerSandbox] = SyntaxSandbox) -> None:
+    def __init__(
+        self, factory: Callable[..., DockerSandbox] = SyntaxSandbox, *, path: str = ALLOWED_FILE
+    ) -> None:
+        if path not in REPAIR_FILES:
+            raise DiagnosisError("PATCH_TARGET_FORBIDDEN")
         self.factory = factory
+        self.path = path
 
     async def _inspect(self, payload: str) -> CheckResult:
-        sandbox = self.factory(f"syntax-{secrets.token_hex(6)}", image=NODE_IMAGE)
+        python = self.path == PYTHON_FILE
+        sandbox = self.factory(
+            f"syntax-{secrets.token_hex(6)}", image=WORKSPACE_IMAGE if python else NODE_IMAGE
+        )
         creation = asyncio.create_task(sandbox.create())
         try:
             try:
@@ -161,22 +176,28 @@ class DockerSyntaxChecker:
             except asyncio.CancelledError:
                 await creation
                 raise
+            script = "diagnosis_python_check.py" if python else "diagnosis_check.cjs"
+            command = f"python -I {script} input.json" if python else f"node {script} input.json"
             await sandbox.load_files(
                 {
-                    "check.cjs": files("echo_agent").joinpath("diagnosis_check.cjs").read_bytes(),
+                    script: files("echo_agent").joinpath(script).read_bytes(),
                     "input.json": payload.encode(),
                 }
             )
-            result = await sandbox.exec("node check.cjs input.json", timeout_seconds=15)
+            result = await sandbox.exec(command, timeout_seconds=15)
             if result.timed_out or result.truncated:
                 return CheckResult(False, False, None, reason="CHECK_TIMEOUT")
-            return parse_check(result.exit_code, result.stdout)
+            return parse_check(result.exit_code, result.stdout, self.path)
         finally:
             await sandbox.destroy()
 
     async def check(self, source: str, seconds: float) -> CheckResult:
         try:
-            payload = check_payload(source)
+            payload = (
+                json.dumps({"path": self.path, "code": source})
+                if self.path == PYTHON_FILE
+                else check_payload(source)
+            )
             async with asyncio.timeout(seconds):
                 return await self._inspect(payload)
         except DiagnosisError as error:

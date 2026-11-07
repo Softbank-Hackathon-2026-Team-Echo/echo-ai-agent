@@ -10,7 +10,7 @@
 
 ## 교체·보완한 부분
 
-- 단일 모델 diff 생성 대신 #24 DiagnosisService를 사용한다. EV/SC 근거 검사와 격리된 Node 문법 검사에서 원본 FAIL → 수정본 PASS를 확인한 패치만 반환한다. 자동 수정은 기존 demo HTML의 classic inline JS 범위다.
+- 단일 모델 diff 생성 대신 #24 DiagnosisService를 사용한다. EV/SC 근거 검사와 격리된 Node/Python 문법 검사에서 원본 FAIL → 수정본 PASS를 확인한 패치만 반환한다. 자동 수정은 기존 demo HTML의 classic inline JS 및 demo-app #7의 `app/main.py` 닫는 괄호 복구 범위다. Python 범위 제한은 정본 1절을 따른다.
 - 소스 파일 ±60줄을 보내던 간단판 대신, 지원 파일의 전체 소스를 64 KiB 이내에서 가려 제공한다. 로그가 지원 파일을 가리키지 않으면 로그만 분석하고 자동 수정하지 않는다.
 - 알려진 토큰 외 일반 비밀번호/인증 값도 가리고 민감 파일을 먼저 제외한다. 최종 정규화 diff의 주변 문맥에서 비밀값이 복원되는 경우도 거절한다.
 - LOG.line은 WAS logTail 내 1부터 번호, evidence 최대 20개. 내부 검사 로그를 logTail 원문으로 가장하지 않는다.

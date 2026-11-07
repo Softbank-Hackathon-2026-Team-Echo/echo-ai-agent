@@ -11,6 +11,8 @@ from echo_agent.precheck_model import mask_tokens, secret_candidates
 
 PURPOSE = "error-diagnosis.v1"
 ALLOWED_FILE = "app/static/index.html"
+PYTHON_FILE = "app/main.py"
+REPAIR_FILES = frozenset({ALLOWED_FILE, PYTHON_FILE})
 MAX_SOURCE_BYTES = 64 * 1024
 MAX_INPUT_BYTES = 1024 * 1024
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -105,6 +107,7 @@ class DiagnosisInput:
     failure: dict[str, Any]
     simulated: bool
     source_hash: str | None
+    path: str = ALLOWED_FILE
 
     @classmethod
     def parse(cls, raw: Mapping[str, Any]) -> "DiagnosisInput":
@@ -120,8 +123,15 @@ class DiagnosisInput:
         environment = text_field(raw.get("environment"), limit=128)
         if type(raw.get("simulated")) is not bool:
             raise DiagnosisError("INPUT_INVALID")
-        if raw.get("allowedFiles") != [ALLOWED_FILE]:
+        allowed = raw.get("allowedFiles")
+        if (
+            not isinstance(allowed, list)
+            or len(allowed) != 1
+            or not isinstance(allowed[0], str)
+            or allowed[0] not in REPAIR_FILES
+        ):
             raise DiagnosisError("PATCH_TARGET_FORBIDDEN")
+        path = allowed[0]
         files = raw.get("sourceFiles", [])
         commit = raw.get("sourceCommit")
         if commit is not None and (
@@ -133,7 +143,7 @@ class DiagnosisInput:
         source = None
         if files:
             item = files[0]
-            if not isinstance(item, Mapping) or item.get("path") != ALLOWED_FILE or commit is None:
+            if not isinstance(item, Mapping) or item.get("path") != path or commit is None:
                 raise DiagnosisError("INPUT_INVALID")
             source = text_field(item.get("content"), limit=MAX_SOURCE_BYTES)
             if len(source.encode()) > MAX_SOURCE_BYTES:
@@ -211,6 +221,7 @@ class DiagnosisInput:
             safe_failure,
             raw["simulated"],
             hashlib.sha256(source.encode()).hexdigest() if source else None,
+            path,
         )
 
 
@@ -262,7 +273,7 @@ def prepare_evidence(request: DiagnosisInput) -> Evidence:
             source.append(
                 {
                     "id": f"SC{offset + 1:06d}",
-                    "path": ALLOWED_FILE,
+                    "path": request.path,
                     "line": offset + 1,
                     "text": line,
                 }

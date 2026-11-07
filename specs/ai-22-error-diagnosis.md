@@ -18,8 +18,9 @@ CHANGE_PROPOSAL claim → 하트비트
 → WAS diagnosis + origin=AI patch + processing 제출 → 임시 작업 공간 정리
 ```
 
-- 자동 수정은 `app/static/index.html`의 기존 classic inline JavaScript에 한정한다. 해당 파일·줄을 가리키는 실패 로그가 있을 때 그 커밋의 전체 HTML을 제공한다. 다른 언어·파일은 현재 자동 수정 범위가 아니다. 소스가 없거나 지원 대상이 아니어도 로그 기반 진단은 가능하며 검증하지 못한 패치는 반환하지 않는다.
-- 모델 호출 최대 2회, SDK 재시도 0, 엔진 예산 최대 180초. 수정본 문법 실패 때만 원본 기준으로 재시도한다. Node 공식 고정 digest·Docker network none/read-only/non-root/자원 상한을 재사용하고 고객 JavaScript는 실행하지 않는다.
+- 자동 수정은 `app/static/index.html`의 기존 classic inline JavaScript와 `app/main.py`의 닫는 괄호 누락을 지원한다. Python은 독립 문법 검사기가 지목한 한 줄에서 기존 문자를 보존하고 `)`/`]`/`}` 최대 3개를 추가하는 수정 한 건만 허용한다. 코드 삭제·교체·다른 줄/파일 수정은 거절한다. 일반 Python 오류 전체를 고치는 기능은 아니다.
+- 실패 로그에서 지원 파일 하나가 특정될 때 그 실패 커밋의 원본을 제공한다. 여러 지원 파일이 섞인 모호한 로그, 소스가 없거나 지원 대상이 아닌 경우는 로그 기반 진단만 가능하며 검증하지 못한 패치는 반환하지 않는다.
+- 모델 호출 최대 2회, SDK 재시도 0, 엔진 예산 최대 180초. 수정본 문법 실패 때만 원본 기준으로 재시도한다. Node/Python 공식 고정 digest·Docker network none/read-only/non-root/자원 상한을 재사용한다. Python은 `compile`만 하고 고객 모듈을 import/실행하지 않는다. 검사 도구 이미지가 없으면 자동 다운로드 없이 검증 불가로 처리한다.
 - `fixable=true`는 원본 문법 FAIL → 수정본 PASS, 허용된 변경 범위·근거·최종 diff 검사까지 만족해야 한다. 실제 화면/API/DB 정상이나 배포 완료를 뜻하지 않는다.
 - `--no-model`은 마스킹된 로그/위치 규칙만 사용하고 패치를 만들지 않는다. 모델 거절·API 실패는 코드별 FAILED이며 전송 기록은 남긴다.
 
@@ -35,7 +36,7 @@ CHANGE_PROPOSAL claim → 하트비트
 - `category`: CODE / CONFIG / BUILD / RUNTIME / PLATFORM, 근거 부족이면 null.
 - **운영 LOG.line은 failure.logTail의 1부터 위치**, FILE.line은 파일의 실제 줄이다. 내부 문법 검사기가 생성한 로그는 logTail에 있었던 것처럼 번호를 붙여 제출하지 않는다. evidence 최대 20개, 각 text 최대 300자로 정리한다.
 - deployRequestId/environmentId/sourceCommitSha는 WAS가 붙인다. 러너 diagnosis에 중복 제출하지 않는다.
-- patch checks: DIFF_APPLIES / POLICY / JAVASCRIPT_SYNTAX / GIT_APPLY. 빌드·Trivy·healthz는 승인 이후 별도 실행이다.
+- patch checks: DIFF_APPLIES / POLICY / JAVASCRIPT_SYNTAX 또는 PYTHON_SYNTAX / GIT_APPLY. 빌드·Trivy·healthz는 승인 이후 별도 실행이다. 프롬프트·Python 수정 정책 버전은 diagnosis-v1.3이다.
 - processing은 실제 모델 전송을 기록하며 실패·거절·결과 변환 실패에도 보존한다. Anthropic 직접 호출이므로 modelRegion=null. 운영 제어 프로세스는 gcp/asia-northeast3, 로컬 검증은 local/development다.
 - CHANGE_PROPOSAL은 PRECHECK/C-AI-1 증거로 제출하지 않는다. WAS가 422로 거절하면 필드를 지우거나 PRECHECK로 재전송하지 않는다.
 - 로컬 CLI의 `--was-result`는 같은 공개 필드 모양을 출력한다. CLI는 자체 입력 로그의 원본 좌표를 유지하며, logTail 좌표 변환은 운영 어댑터가 명시적으로 선택한다.
@@ -58,13 +59,25 @@ CHANGE_PROPOSAL claim → 하트비트
 
 ## 5. 직접 검증과 남은 인수
 
+### demo-app #7 실제 시작 실패 검증 — 2026-11-07 17:12 KST
+
+- 전체 **451 passed**, skip 0. 실제 Docker 포함, ruff lint/format·strict mypy·최종 sdist/wheel 빌드 통과. 배포 wheel의 Python/Node 검사기 및 변경 모듈이 소스와 일치한다.
+- 실제 GitHub 고정 커밋 `53997e1`을 받아 Docker 이미지를 빌드했다. 컨테이너 시작은 종료 1, `app/main.py:213`의 `SyntaxError: '(' was never closed`를 실제로 재현했다. 이 로그 38줄과 실패 커밋 소스를 WAS #101 어댑터로 전달했다.
+- **로컬:** 실제 Claude 1회 10.748초 → 닫는 괄호 한 글자 diff → Python 문법/엄격 diff/git apply → 기존 APPLY_PATCH의 실제 빌드·Trivy(수정 가능한 HIGH/CRITICAL 0)·`/healthz` PASS. 전체 73.3초.
+- **GCP 서울 VM:** 별도 임시 소스, 기존 release Python과 echo-runner 계정으로 같은 검증을 수행했다. 실제 Claude 1회 7.093초, 전체 45.348초, 진단/빌드/스캔/healthz 모두 PASS. 임시 디렉터리·컨테이너·이미지 정리, 기존 systemd active·release `82aac70` 유지. Anthropic API 호출이며 모델의 서울 호스팅을 뜻하지 않는다.
+- 두 실제 결과 모두 현재 WAS `DiagnosisRunResultRequest`와 정규화에서 `DIAGNOSED/CODE/fixable=true`, 패치 `PROPOSED`를 확인했다. 승인 입력은 리허설이 자체 구성했다. **실제 WAS HTTP·화면·사람 승인·원격 커밋/PR·재배포 완료는 아니다.**
+- GCP 일회성 실행은 초기 환경 누락으로 실패했다. 전송 시 release Python 사용, BuildKit 활성화 및 기존 unit의 `TRIVY_CACHE_DIR`를 맞춰 해결했다. 운영 환경 파일이나 보안 스캔 기준은 변경하지 않았다.
+- [실행 증거](evidence/ai-22-python-rehearsal-2026-11-07.json), [재현 명령](../docs/error-diagnosis-demo.md). 운영 러너 release/스위치 및 기존 WAS #111 활성화·화면 종단 인수는 남는다.
+
+### 앞선 JavaScript 통합 검증 이력
+
 - 전체 **431 passed**, skip 0. Ruff lint/format·mypy·시작 스크립트 문법 검사 통과. 실제 Docker 회귀 포함.
 - 공개 demo-app의 고정 커밋 `d856a1d`을 실제 GitHub에서 받아 제한된 소스 30개와 HTML 368행을 읽었다. sdist/wheel 빌드 및 진단 모듈·Node 검사기 포함 확인.
 - WAS #101 최종 head `62dfe5e`의 DiagnosisRunResultRequest와 정규화로 정상 패치·규칙만·거절·로그 없음·근거 부족·입력 오류 6개 결과를 확인. 정상 패치는 PROPOSED다. 실제 HTTP/DB 제출 시험은 아니다.
 - 최신 통합 어댑터에 합성 실패 커밋과 실제 Node 오류 로그를 넣어 Claude 1회 **7.677초**, 전체 진단/검증 **9.626초**. 수정본은 정상 원본과 일치, LOG.line=1·FILE.line=160, 최종 실제 결과도 WAS 스키마/정규화 통과. network none·read-only·비루트, 컨테이너 잔존 0.
 - 이 검증은 로컬 제어 프로세스 + Docker + Anthropic API다. 소스 전달은 합성 로컬 Git 객체 reader를 주입했다. 실제 GitHub→운영 WAS 요청·사람 승인·고객 앱 빌드/Trivy/healthz·수정 커밋 재배포 전체를 검증한 것이 아니다.
 - [통합 실행 증거](evidence/ai-22-was101-integration-2026-11-07.json).
-- 남음: 실제 배포 실패(프론트 문법 검사 로그 포함)가 WAS 입력으로 전달되는지, 운영 러너 배포/스위치, 화면·승인, WAS 저장소 반영·수정 커밋 재배포 확인. 본 변경은 DB 네트워크·Vertex·운영 자원을 변경하지 않는다.
+- 남음: demo-app #7의 실제 컨테이너 시작 실패 로그가 운영 WAS 입력으로 전달되는지, 운영 러너 배포/스위치, 화면·승인, WAS 저장소 반영·수정 커밋 재배포 확인. #7은 Python 구문 오류이므로 별도 프론트 빌드 검사기가 필수 선행 작업은 아니다. 본 변경은 DB 네트워크·Vertex·운영 자원을 변경하지 않는다.
 
 ## 6. 과거 단독 검증 기록
 

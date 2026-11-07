@@ -1,5 +1,26 @@
 # 오류 진단·수정 시연 (#22)
 
+## 팀 시연 PR #7의 실제 시작 실패 검증
+
+팀의 [demo-app #7](https://github.com/Softbank-Hackathon-2026-Team-Echo/echo-demo-app/pull/7)은 `app/main.py:213`의 닫는 괄호 누락이다. HTML/JS 시연과 달리 실제 컨테이너가 시작에 실패하여 기존 WAS의 컨테이너 로그 수집 경로를 탈 수 있다. PR을 병합할 필요 없이 고정 커밋 `53997e169a29604b37088b793425b7d72a7946bf`로 아래 검증을 실행한다.
+
+```bash
+docker pull python:3.13-slim@sha256:ae14d4ce8771606477a81446e7ef429edd6762305fc50c84507c1041fa8285d1
+# ANTHROPIC_API_KEY는 기존 안전한 주입 경로로 설정한다. 값 출력/set -x 금지.
+PYTHONPATH=src .venv/bin/python deploy/rehearse-demo-failure.py \
+  --live --output-dir /tmp/echo-python-rehearsal-01
+```
+
+이 명령은 실제 GitHub 소스 → 오류 이미지 빌드/시작 → 종료 코드·로그 50줄 → 실제 Claude 진단 → Python 문법 검사 → diff → 기존 APPLY_PATCH의 빌드·Trivy·healthz를 확인한다. Docker/Trivy가 필요하며 모델 호출은 최대 2회다. 기존 healthz 검증의 가짜 DB 주소·`AUTO_MIGRATE=false`를 재사용하고 컨테이너는 네트워크 없이 실행한다. 운영 DB나 테스트 DB가 필요하지 않다.
+
+GCP에서 직접 실행할 때는 release의 Python 3.13과 `echo-runner` 계정을 사용한다. 기존 unit과 동일하게 `CLOUDSDK_CONFIG=/var/lib/echo-precheck-runner/gcloud`, `DOCKER_CONFIG=/var/lib/echo-precheck-runner/docker`, `TRIVY_CACHE_DIR=/var/lib/echo-precheck-runner/trivy-cache`를 지정한다. 러너 계정의 기본 홈은 `/nonexistent`이므로 Trivy 캐시 경로를 생략하면 권한 오류가 난다. 스크립트는 기존 적용기와 같이 `DOCKER_BUILDKIT=1`로 빌드한다. 기존 systemd release/스위치를 바꿀 필요는 없다.
+
+`startup.json`, `input-snapshot.json`, `diagnosis-result.json`, `fix.diff`, `model-calls.json`, `diagnosis-events.json`, `apply-events.json`, `summary.json`을 새 출력 디렉터리에 남긴다. 모델/도구의 실패는 그대로 실패 처리하며 Trivy 기준을 완화하지 않는다. 이 리허설은 **승인 입력을 자체 구성**하므로 실제 사람 승인·WAS HTTP/DB·원격 커밋/PR·재배포를 검증한 것이 아니다. 출력도 `simulated=true`, `wasConnected=false`로 구분한다. 저장소에 push하거나 시연 PR을 병합하지 않는다.
+
+운영 연결 순서는 AI 통합 PR 검토/병합 → VM release 교체 및 고정 검사 이미지 준비 → 러너 `ECHO_DIAGNOSIS=on`/`ECHO_APPLY_PATCH=on` → WAS 실제 진단 스위치 및 기존 #111 저장소 반영 스위치 → 화면에서 실패·실진단·사람 승인·수정 커밋 재배포 인수다. App 설치에 대상 저장소가 포함되고 Contents/Pull requests 쓰기 권한이 있는지도 활성화 직전에 확인한다. `simulated` 결과로 실제 진단 성공을 대신하지 않는다.
+
+## HTML/JavaScript 단독 검증
+
 정상 HTML의 사본에 `)` 한 글자 누락 → 실제 오류 로그 → 진단·diff → 같은 Docker 문법 검사 → 원본 복구 확인을 한 명령으로 실행한다. **기본은 모델 응답 재생이고 `--live`일 때만 Claude를 실제로 부른다.** 실제 호출도 최대 2회다.
 
 ## 준비

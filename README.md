@@ -208,7 +208,7 @@ sudo ln -sfn /opt/echo-ai-agent/releases/<이전 sha> /opt/echo-ai-agent/current
 
 ## 오류 진단·수정 앞단 (#22, 기본 꺼짐)
 
-실패 로그와 고정 소스에서 근거 있는 진단·실제 diff를 만들고, 기존 DockerSandbox의 Node 문법 검사로 원본 실패/수정본 통과를 확인한다. v1은 `app/static/index.html`의 inline JavaScript만 대상으로 한다. 민감 파일 제외·입력/최종 diff 비밀값 검사와 logTail 근거 좌표를 적용한다. 계약·CLI·fixture·통합 조건: [오류 진단 SPEC](specs/ai-22-error-diagnosis.md).
+실패 로그와 고정 소스에서 근거 있는 진단·실제 diff를 만들고, 기존 DockerSandbox의 Node/Python 문법 검사로 원본 실패/수정본 통과를 확인한다. `app/static/index.html`의 inline JavaScript와 demo-app #7의 `app/main.py` 닫는 괄호 누락을 지원한다. Python은 검사기가 지목한 한 줄에 닫는 괄호 3개 이하를 추가하는 수정만 허용한다. 민감 파일 제외·입력/최종 diff 비밀값 검사와 logTail 근거 좌표를 적용한다. 계약·CLI·fixture·통합 조건: [오류 진단 SPEC](specs/ai-22-error-diagnosis.md).
 
 `ECHO_DIAGNOSIS=off`가 기본이다. WAS #101 입력·결과와 #25의 고객 저장소 APPLY_PATCH를 통합했다. 실제 운영 연결 확인 뒤 활성화하며 `--no-model`에서는 규칙만 사용한다. 기존 `PRECHECK` 결과/보안 증거와 구분한다. 로컬 `diagnosis_cli`는 WAS에 쓰지 않고 JSON 결과만 출력한다. 모델 응답 재생 옵션은 항상 `simulated=true`다.
 

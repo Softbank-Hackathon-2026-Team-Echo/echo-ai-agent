@@ -9,8 +9,8 @@ from collections.abc import Mapping
 from typing import Any
 
 from echo_agent.diagnosis_input import (
-    ALLOWED_FILE,
     MAX_SOURCE_BYTES,
+    REPAIR_FILES,
     DiagnosisError,
     redact,
     text_field,
@@ -58,9 +58,10 @@ def _evidence(diagnosis: Mapping[str, Any], *, log_tail: bool = False) -> list[d
                 content = content[: limit - 1] + "…"
             evidence = {"source": kind, "line": line, "text": content}
             if kind == "FILE":
-                if item.get("path") != ALLOWED_FILE or line is None:
+                path = item.get("path")
+                if not isinstance(path, str) or path not in REPAIR_FILES or line is None:
                     raise DiagnosisError("INVALID_EVIDENCE")
-                evidence["path"] = ALLOWED_FILE
+                evidence["path"] = path
             if evidence not in output:
                 output.append(evidence)
     return output[:20] if log_tail else output

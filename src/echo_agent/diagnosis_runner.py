@@ -40,6 +40,7 @@ from echo_agent.diagnosis_input import (
     ALLOWED_FILE,
     MAX_SOURCE_BYTES,
     PURPOSE,
+    REPAIR_FILES,
     DiagnosisError,
     redact,
     sensitive_source_path,
@@ -512,7 +513,7 @@ def rule_diagnosis(
 class Diagnoser:
     """WAS #101 adapter for the #24 evidence and sandbox-verified repair engine.
 
-    Automatic repair remains limited to existing classic JS in app/static/index.html.
+    Repairs are bounded to classic inline JS or missing Python closing delimiters.
     Other failures can be diagnosed from logs but do not receive unchecked patches.
     """
 
@@ -563,12 +564,11 @@ class Diagnoser:
                 )
             )
         files = []
-        if (
-            source
-            and ALLOWED_FILE in source.files
-            and any(item.path == ALLOWED_FILE for item in locations)
-        ):
-            files = [{"path": ALLOWED_FILE, "content": "".join(source.read_lines(ALLOWED_FILE))}]
+        targets = {item.path for item in locations if item.path in REPAIR_FILES}
+        # Ambiguous traces are diagnosed without selecting a patch target by guesswork.
+        target = next(iter(targets)) if len(targets) == 1 else ALLOWED_FILE
+        if source and len(targets) == 1:
+            files = [{"path": target, "content": "".join(source.read_lines(target))}]
         snapshot = {
             "schemaVersion": 1,
             "purpose": PURPOSE,
@@ -576,7 +576,7 @@ class Diagnoser:
             "environment": diagnosis_input.environment,
             "sourceCommit": diagnosis_input.commit_sha,
             "sourceFiles": files,
-            "allowedFiles": [ALLOWED_FILE],
+            "allowedFiles": [target],
             "simulated": False,
             "failure": dict(diagnosis_input.failure),
             "logs": [
@@ -623,7 +623,7 @@ class Diagnoser:
                     verified = verify_model_diff(
                         patch["diff"],
                         source,
-                        [ALLOWED_FILE],
+                        [target],
                         workspace,
                         self._run,
                         min(GIT_SECONDS, left / 5),

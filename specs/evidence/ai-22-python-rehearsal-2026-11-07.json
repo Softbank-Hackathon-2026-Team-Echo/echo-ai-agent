@@ -1,0 +1,874 @@
+{
+  "verifiedAt": "2026-11-07T17:12:00+09:00",
+  "scope": "real demo-app #7 source and startup failure; real Claude, Docker, Trivy and healthz; synthetic approval, no WAS submission or redeploy",
+  "sourceRepo": "Softbank-Hackathon-2026-Team-Echo/echo-demo-app",
+  "sourceCommit": "53997e169a29604b37088b793425b7d72a7946bf",
+  "originalMainCommit": "d856a1d13f19aa219ebba117c29561f838da9fe4",
+  "local": {
+    "summary.json": {
+      "sourceRepo": "Softbank-Hackathon-2026-Team-Echo/echo-demo-app",
+      "sourceCommit": "53997e169a29604b37088b793425b7d72a7946bf",
+      "location": "local/development",
+      "realModelCalls": 1,
+      "diagnosisStatus": "SUCCEEDED",
+      "diagnosisFailure": null,
+      "startupExitCode": 1,
+      "syntheticApproval": true,
+      "wasConnected": false,
+      "pushed": false,
+      "redeployed": false,
+      "applyStatus": "SUCCEEDED",
+      "applyFailure": null,
+      "sandboxCommit": "18d2cbd51493a5b03cde7c4171ab881676159672",
+      "seconds": 73.3
+    },
+    "model-calls.json": [
+      {
+        "model": "claude-opus-5-5",
+        "requestId": "req_011CgoDobapYPneWX2WPHTX2",
+        "seconds": 10.748,
+        "inputTokens": 14903,
+        "outputTokens": 618
+      }
+    ],
+    "diagnosis-result.json": {
+      "status": "SUCCEEDED",
+      "failureCode": null,
+      "simulated": true,
+      "sandbox": null,
+      "model": {
+        "id": "claude-opus-5-5",
+        "effort": "medium",
+        "promptVersion": "diagnosis-v1.3",
+        "refusal": false
+      },
+      "configDiff": [],
+      "featureGaps": [],
+      "findings": [],
+      "patches": [
+        {
+          "id": "diagnosis-7f8e94bc9b8f1dc8",
+          "patchHash": "sha256:7f8e94bc9b8f1dc843b6ab28a08e9daf9e8ada40c3dd9a119d5db61a74b4dab6",
+          "files": [
+            "app/main.py"
+          ],
+          "diff": "--- a/app/main.py\n+++ b/app/main.py\n@@ -210,6 +210,6 @@\n \n     @app.get(\"/\", include_in_schema=False)\n     async def index() -> FileResponse:\n-        return FileResponse(INDEX_HTML, media_type=\"text/html; charset=utf-8\"\n+        return FileResponse(INDEX_HTML, media_type=\"text/html; charset=utf-8\")\n \n     return app\n",
+          "reason": "런타임 트레이스백(EV000035~EV000038)과 독립 구문 검사(EV000039)가 모두 app/main.py 213번째 줄에서 '(' was never closed 오류를 보고합니다. 소스 SC000213에서 FileResponse( 호출이 닫는 괄호 없이 끝나므로, 해당 줄 끝에 ')' 하나를 삽입하는 것이 최소 수정입니다.",
+          "touchesProtectedFiles": false,
+          "origin": "AI",
+          "checks": [
+            {
+              "name": "DIFF_APPLIES",
+              "result": "PASS",
+              "summary": "원본 코드에 수정안을 정확히 적용할 수 있습니다."
+            },
+            {
+              "name": "POLICY",
+              "result": "PASS",
+              "policyVersion": "diagnosis-v1.3",
+              "summary": "문법 오류 줄에 누락된 닫는 괄호만 추가했습니다."
+            },
+            {
+              "name": "PYTHON_SYNTAX",
+              "result": "PASS",
+              "toolVersion": "Python 3.13.18",
+              "summary": "같은 문법 검사에서 원본은 실패하고 수정본은 통과했습니다."
+            },
+            {
+              "name": "GIT_APPLY",
+              "result": "PASS",
+              "summary": "실패 커밋 적용 및 엄격한 적용기와의 일치를 확인했습니다."
+            }
+          ]
+        }
+      ],
+      "blockedAttempts": [],
+      "diagnosis": {
+        "result": "DIAGNOSED",
+        "category": "CODE",
+        "cause": "app/main.py 213번째 줄의 FileResponse( 호출에서 여는 괄호가 닫히지 않아 SyntaxError가 발생했고, uvicorn이 app.main 모듈을 임포트하는 중에 컨테이너가 종료 코드 1로 시작에 실패했습니다.",
+        "fixable": true,
+        "unfixableReason": null,
+        "evidence": [
+          {
+            "source": "LOG",
+            "line": 23,
+            "text": "    module = importlib.import_module(module_str)"
+          },
+          {
+            "source": "LOG",
+            "line": 35,
+            "text": "  File \"/app/app/main.py\", line 213"
+          },
+          {
+            "source": "LOG",
+            "line": 36,
+            "text": "    return FileResponse(INDEX_HTML, media_type=\"text/html; charset=utf-8\""
+          },
+          {
+            "source": "LOG",
+            "line": 37,
+            "text": "                       ^"
+          },
+          {
+            "source": "LOG",
+            "line": 38,
+            "text": "SyntaxError: '(' was never closed"
+          },
+          {
+            "source": "FILE",
+            "line": 213,
+            "text": "        return FileResponse(INDEX_HTML, media_type=\"text/html; charset=utf-8\"",
+            "path": "app/main.py"
+          }
+        ]
+      },
+      "processing": {
+        "location": "local/development",
+        "sandbox": false,
+        "modelProvider": "ANTHROPIC",
+        "model": "claude-opus-5-5",
+        "modelRegion": null,
+        "dataClasses": [
+          "LOGS",
+          "SOURCE_CODE"
+        ],
+        "externalTransfer": true,
+        "externalTransferBytes": 36658
+      }
+    },
+    "diagnosis-events.json": [
+      {
+        "seq": 1,
+        "at": "2026-11-07T08:05:04.161606Z",
+        "step": "INPUT_LOAD",
+        "level": "INFO",
+        "message": "diagnosis input loaded",
+        "data": {
+          "inputHash": null,
+          "schemaVersion": 1,
+          "repo": "Softbank-Hackathon-2026-Team-Echo/echo-demo-app",
+          "commitSha": "53997e169a29604b37088b793425b7d72a7946bf",
+          "failureCode": "CONTAINER_START_FAILED",
+          "logLines": 38
+        }
+      },
+      {
+        "seq": 2,
+        "at": "2026-11-07T08:05:05.388212Z",
+        "step": "SANDBOX_CREATE",
+        "level": "INFO",
+        "message": "repository source fetched",
+        "data": {
+          "repo": "Softbank-Hackathon-2026-Team-Echo/echo-demo-app",
+          "commitSha": "53997e169a29604b37088b793425b7d72a7946bf",
+          "files": 30,
+          "credentials": "none"
+        }
+      },
+      {
+        "seq": 3,
+        "at": "2026-11-07T08:05:05.394219Z",
+        "step": "INPUT_LOAD",
+        "level": "INFO",
+        "message": "diagnosis input prepared",
+        "data": {
+          "logs": 38,
+          "sourceAvailable": true
+        }
+      },
+      {
+        "seq": 4,
+        "at": "2026-11-07T08:05:05.394227Z",
+        "step": "SANDBOX_CREATE",
+        "level": "INFO",
+        "message": "checking original Python syntax",
+        "data": {}
+      },
+      {
+        "seq": 5,
+        "at": "2026-11-07T08:05:06.163225Z",
+        "step": "SANDBOX_DELETE",
+        "level": "INFO",
+        "message": "original syntax checker finished",
+        "data": {
+          "available": true,
+          "passed": false
+        }
+      },
+      {
+        "seq": 6,
+        "at": "2026-11-07T08:05:06.163303Z",
+        "step": "ANALYZE",
+        "level": "INFO",
+        "message": "diagnosis model request",
+        "data": {
+          "attempt": 1
+        }
+      },
+      {
+        "seq": 7,
+        "at": "2026-11-07T08:05:16.914620Z",
+        "step": "PATCH_PROPOSE",
+        "level": "INFO",
+        "message": "diagnosis edit drafted; syntax verification pending",
+        "data": {
+          "attempt": 1
+        }
+      },
+      {
+        "seq": 8,
+        "at": "2026-11-07T08:05:17.669759Z",
+        "step": "PATCH_VERIFY",
+        "level": "INFO",
+        "message": "candidate syntax checker finished",
+        "data": {
+          "attempt": 1,
+          "available": true,
+          "passed": true
+        }
+      },
+      {
+        "seq": 9,
+        "at": "2026-11-07T08:05:17.711516Z",
+        "step": "SANDBOX_DELETE",
+        "level": "INFO",
+        "message": "diagnosis workspace deleted",
+        "data": {
+          "pushed": false
+        }
+      }
+    ],
+    "apply-events.json": [
+      {
+        "seq": 1,
+        "at": "2026-11-07T08:05:17.712198Z",
+        "step": "INPUT_LOAD",
+        "level": "INFO",
+        "message": "apply input loaded",
+        "data": {
+          "inputHash": null,
+          "schemaVersion": 1,
+          "parentRunId": "0fd0a978-70d5-4a55-92fd-bec4ce643e15",
+          "patchId": "diagnosis-7f8e94bc9b8f1dc8",
+          "origin": "AI",
+          "files": [
+            "app/main.py"
+          ],
+          "branch": "applied/2d815b82-c930-4294-bc81-a628dac12fff"
+        }
+      },
+      {
+        "seq": 2,
+        "at": "2026-11-07T08:05:17.712302Z",
+        "step": "INPUT_LOAD",
+        "level": "INFO",
+        "message": "patch hash verified",
+        "data": {
+          "patchHash": "sha256:7f8e94bc9b8f1dc843b6ab28a08e9daf9e8ada40c3dd9a119d5db61a74b4dab6",
+          "repo": "Softbank-Hackathon-2026-Team-Echo/echo-demo-app",
+          "sourceCommitSha": "53997e169a29604b37088b793425b7d72a7946bf"
+        }
+      },
+      {
+        "seq": 3,
+        "at": "2026-11-07T08:05:19.530398Z",
+        "step": "SANDBOX_CREATE",
+        "level": "INFO",
+        "message": "apply workspace created",
+        "data": {
+          "mode": "service-source",
+          "repo": "Softbank-Hackathon-2026-Team-Echo/echo-demo-app",
+          "baseCommit": "53997e169a29604b37088b793425b7d72a7946bf",
+          "credentials": "none"
+        }
+      },
+      {
+        "seq": 4,
+        "at": "2026-11-07T08:05:19.654743Z",
+        "step": "PATCH_VERIFY",
+        "level": "INFO",
+        "message": "patch applied",
+        "data": {
+          "files": [
+            "app/main.py"
+          ],
+          "appliedCommitSha": "18d2cbd51493a5b03cde7c4171ab881676159672",
+          "committed": true,
+          "pushed": false
+        }
+      },
+      {
+        "seq": 5,
+        "at": "2026-11-07T08:05:20.207502Z",
+        "step": "PATCH_VERIFY",
+        "level": "INFO",
+        "message": "build context ready",
+        "data": {
+          "sourceRepo": "Softbank-Hackathon-2026-Team-Echo/echo-demo-app",
+          "sourceCommit": "53997e169a29604b37088b793425b7d72a7946bf"
+        }
+      },
+      {
+        "seq": 6,
+        "at": "2026-11-07T08:05:21.013955Z",
+        "step": "PATCH_VERIFY",
+        "level": "INFO",
+        "message": "image built",
+        "data": {
+          "image": "echo-apply-2d815b82c930:local",
+          "dockerVersion": "27.5.1",
+          "seconds": 0.8,
+          "pushed": false
+        }
+      },
+      {
+        "seq": 7,
+        "at": "2026-11-07T08:06:11.739152Z",
+        "step": "PATCH_VERIFY",
+        "level": "INFO",
+        "message": "image scanned",
+        "data": {
+          "trivyVersion": "0.75.0",
+          "fixableHigh": 0,
+          "fixableCritical": 0,
+          "criterion": "C-IMG-1: fixable HIGH/CRITICAL == 0"
+        }
+      },
+      {
+        "seq": 8,
+        "at": "2026-11-07T08:06:14.174437Z",
+        "step": "PATCH_VERIFY",
+        "level": "INFO",
+        "message": "healthz passed",
+        "data": {
+          "path": "/healthz",
+          "attempts": 2,
+          "network": "none"
+        }
+      },
+      {
+        "seq": 9,
+        "at": "2026-11-07T08:06:14.176200Z",
+        "step": "PATCH_VERIFY",
+        "level": "INFO",
+        "message": "apply checks passed",
+        "data": {
+          "appliedCommitSha": "18d2cbd51493a5b03cde7c4171ab881676159672",
+          "branch": "applied/2d815b82-c930-4294-bc81-a628dac12fff",
+          "pushed": false
+        }
+      },
+      {
+        "seq": 10,
+        "at": "2026-11-07T08:06:14.494993Z",
+        "step": "SANDBOX_DELETE",
+        "level": "INFO",
+        "message": "apply workspace deleted",
+        "data": {
+          "containerRemoved": true,
+          "imageRemoved": true
+        }
+      }
+    ],
+    "startup.json": {
+      "exitCode": 1,
+      "logTail": [
+        "Traceback (most recent call last):",
+        "  File \"<frozen runpy>\", line 203, in _run_module_as_main",
+        "  File \"<frozen runpy>\", line 88, in _run_code",
+        "  File \"/app/app/__main__.py\", line 23, in <module>",
+        "    main()",
+        "    ~~~~^^",
+        "  File \"/app/app/__main__.py\", line 10, in main",
+        "    uvicorn.run(",
+        "    ~~~~~~~~~~~^",
+        "        \"app.main:create_app\",",
+        "        ^^^^^^^^^^^^^^^^^^^^^^",
+        "    ...<6 lines>...",
+        "        proxy_headers=True,",
+        "        ^^^^^^^^^^^^^^^^^^^",
+        "    )",
+        "    ^",
+        "  File \"/opt/venv/lib/python3.13/site-packages/uvicorn/main.py\", line 620, in run",
+        "    config.load_app()",
+        "    ~~~~~~~~~~~~~~~^^",
+        "  File \"/opt/venv/lib/python3.13/site-packages/uvicorn/config.py\", line 434, in load_app",
+        "    return import_from_string(self.app)",
+        "  File \"/opt/venv/lib/python3.13/site-packages/uvicorn/importer.py\", line 19, in import_from_string",
+        "    module = importlib.import_module(module_str)",
+        "  File \"/usr/local/lib/python3.13/importlib/__init__.py\", line 88, in import_module",
+        "    return _bootstrap._gcd_import(name[level:], package, level)",
+        "           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "  File \"<frozen importlib._bootstrap>\", line 1404, in _gcd_import",
+        "  File \"<frozen importlib._bootstrap>\", line 1369, in _find_and_load",
+        "  File \"<frozen importlib._bootstrap>\", line 1340, in _find_and_load_unlocked",
+        "  File \"<frozen importlib._bootstrap>\", line 935, in _load_unlocked",
+        "  File \"<frozen importlib._bootstrap_external>\", line 1023, in exec_module",
+        "  File \"<frozen importlib._bootstrap_external>\", line 1161, in get_code",
+        "  File \"<frozen importlib._bootstrap_external>\", line 1091, in source_to_code",
+        "  File \"<frozen importlib._bootstrap>\", line 488, in _call_with_frames_removed",
+        "  File \"/app/app/main.py\", line 213",
+        "    return FileResponse(INDEX_HTML, media_type=\"text/html; charset=utf-8\"",
+        "                       ^",
+        "SyntaxError: '(' was never closed"
+      ]
+    },
+    "fix.diff": "--- a/app/main.py\n+++ b/app/main.py\n@@ -210,6 +210,6 @@\n \n     @app.get(\"/\", include_in_schema=False)\n     async def index() -> FileResponse:\n-        return FileResponse(INDEX_HTML, media_type=\"text/html; charset=utf-8\"\n+        return FileResponse(INDEX_HTML, media_type=\"text/html; charset=utf-8\")\n \n     return app\n"
+  },
+  "gcp": {
+    "summary.json": {
+      "sourceRepo": "Softbank-Hackathon-2026-Team-Echo/echo-demo-app",
+      "sourceCommit": "53997e169a29604b37088b793425b7d72a7946bf",
+      "location": "gcp/asia-northeast3",
+      "realModelCalls": 1,
+      "diagnosisStatus": "SUCCEEDED",
+      "diagnosisFailure": null,
+      "startupExitCode": 1,
+      "syntheticApproval": true,
+      "wasConnected": false,
+      "pushed": false,
+      "redeployed": false,
+      "applyStatus": "SUCCEEDED",
+      "applyFailure": null,
+      "sandboxCommit": "5af306f429eda48a9753765cdbbf07de80ca130d",
+      "seconds": 45.348
+    },
+    "model-calls.json": [
+      {
+        "model": "claude-opus-5-5",
+        "requestId": "req_011CgoEEnDitJM1bReeeXypy",
+        "seconds": 7.093,
+        "inputTokens": 14903,
+        "outputTokens": 637
+      }
+    ],
+    "diagnosis-result.json": {
+      "status": "SUCCEEDED",
+      "failureCode": null,
+      "simulated": true,
+      "sandbox": null,
+      "model": {
+        "id": "claude-opus-5-5",
+        "effort": "medium",
+        "promptVersion": "diagnosis-v1.3",
+        "refusal": false
+      },
+      "configDiff": [],
+      "featureGaps": [],
+      "findings": [],
+      "patches": [
+        {
+          "id": "diagnosis-7f8e94bc9b8f1dc8",
+          "patchHash": "sha256:7f8e94bc9b8f1dc843b6ab28a08e9daf9e8ada40c3dd9a119d5db61a74b4dab6",
+          "files": [
+            "app/main.py"
+          ],
+          "diff": "--- a/app/main.py\n+++ b/app/main.py\n@@ -210,6 +210,6 @@\n \n     @app.get(\"/\", include_in_schema=False)\n     async def index() -> FileResponse:\n-        return FileResponse(INDEX_HTML, media_type=\"text/html; charset=utf-8\"\n+        return FileResponse(INDEX_HTML, media_type=\"text/html; charset=utf-8\")\n \n     return app\n",
+          "reason": "런타임 traceback과 독립 구문 검사 모두 app/main.py:213에서 \"'(' was never closed\" 오류를 보고합니다. 소스 213번째 줄은 FileResponse(INDEX_HTML, media_type=\"text/html; charset=utf-8\" 로 끝나며 닫는 괄호가 없습니다. 해당 줄 끝에 ')' 하나를 추가하는 것이 허용된 최소 수정입니다.",
+          "touchesProtectedFiles": false,
+          "origin": "AI",
+          "checks": [
+            {
+              "name": "DIFF_APPLIES",
+              "result": "PASS",
+              "summary": "원본 코드에 수정안을 정확히 적용할 수 있습니다."
+            },
+            {
+              "name": "POLICY",
+              "result": "PASS",
+              "policyVersion": "diagnosis-v1.3",
+              "summary": "문법 오류 줄에 누락된 닫는 괄호만 추가했습니다."
+            },
+            {
+              "name": "PYTHON_SYNTAX",
+              "result": "PASS",
+              "toolVersion": "Python 3.13.18",
+              "summary": "같은 문법 검사에서 원본은 실패하고 수정본은 통과했습니다."
+            },
+            {
+              "name": "GIT_APPLY",
+              "result": "PASS",
+              "summary": "실패 커밋 적용 및 엄격한 적용기와의 일치를 확인했습니다."
+            }
+          ]
+        }
+      ],
+      "blockedAttempts": [],
+      "diagnosis": {
+        "result": "DIAGNOSED",
+        "category": "CODE",
+        "cause": "app/main.py 213번째 줄의 FileResponse( 호출에서 여는 괄호가 닫히지 않아 SyntaxError가 발생했고, uvicorn이 app.main 모듈을 import하는 중 컨테이너가 종료되었습니다.",
+        "fixable": true,
+        "unfixableReason": null,
+        "evidence": [
+          {
+            "source": "LOG",
+            "line": 23,
+            "text": "    module = importlib.import_module(module_str)"
+          },
+          {
+            "source": "LOG",
+            "line": 35,
+            "text": "  File \"/app/app/main.py\", line 213"
+          },
+          {
+            "source": "LOG",
+            "line": 36,
+            "text": "    return FileResponse(INDEX_HTML, media_type=\"text/html; charset=utf-8\""
+          },
+          {
+            "source": "LOG",
+            "line": 37,
+            "text": "                       ^"
+          },
+          {
+            "source": "LOG",
+            "line": 38,
+            "text": "SyntaxError: '(' was never closed"
+          },
+          {
+            "source": "FILE",
+            "line": 213,
+            "text": "        return FileResponse(INDEX_HTML, media_type=\"text/html; charset=utf-8\"",
+            "path": "app/main.py"
+          }
+        ]
+      },
+      "processing": {
+        "location": "gcp/asia-northeast3",
+        "sandbox": false,
+        "modelProvider": "ANTHROPIC",
+        "model": "claude-opus-5-5",
+        "modelRegion": null,
+        "dataClasses": [
+          "LOGS",
+          "SOURCE_CODE"
+        ],
+        "externalTransfer": true,
+        "externalTransferBytes": 36658
+      }
+    },
+    "diagnosis-events.json": [
+      {
+        "seq": 1,
+        "at": "2026-11-07T08:10:46.936033Z",
+        "step": "INPUT_LOAD",
+        "level": "INFO",
+        "message": "diagnosis input loaded",
+        "data": {
+          "inputHash": null,
+          "schemaVersion": 1,
+          "repo": "Softbank-Hackathon-2026-Team-Echo/echo-demo-app",
+          "commitSha": "53997e169a29604b37088b793425b7d72a7946bf",
+          "failureCode": "CONTAINER_START_FAILED",
+          "logLines": 38
+        }
+      },
+      {
+        "seq": 2,
+        "at": "2026-11-07T08:10:47.155813Z",
+        "step": "SANDBOX_CREATE",
+        "level": "INFO",
+        "message": "repository source fetched",
+        "data": {
+          "repo": "Softbank-Hackathon-2026-Team-Echo/echo-demo-app",
+          "commitSha": "53997e169a29604b37088b793425b7d72a7946bf",
+          "files": 30,
+          "credentials": "none"
+        }
+      },
+      {
+        "seq": 3,
+        "at": "2026-11-07T08:10:47.164110Z",
+        "step": "INPUT_LOAD",
+        "level": "INFO",
+        "message": "diagnosis input prepared",
+        "data": {
+          "logs": 38,
+          "sourceAvailable": true
+        }
+      },
+      {
+        "seq": 4,
+        "at": "2026-11-07T08:10:47.164131Z",
+        "step": "SANDBOX_CREATE",
+        "level": "INFO",
+        "message": "checking original Python syntax",
+        "data": {}
+      },
+      {
+        "seq": 5,
+        "at": "2026-11-07T08:10:48.127461Z",
+        "step": "SANDBOX_DELETE",
+        "level": "INFO",
+        "message": "original syntax checker finished",
+        "data": {
+          "available": true,
+          "passed": false
+        }
+      },
+      {
+        "seq": 6,
+        "at": "2026-11-07T08:10:48.127529Z",
+        "step": "ANALYZE",
+        "level": "INFO",
+        "message": "diagnosis model request",
+        "data": {
+          "attempt": 1
+        }
+      },
+      {
+        "seq": 7,
+        "at": "2026-11-07T08:10:55.228853Z",
+        "step": "PATCH_PROPOSE",
+        "level": "INFO",
+        "message": "diagnosis edit drafted; syntax verification pending",
+        "data": {
+          "attempt": 1
+        }
+      },
+      {
+        "seq": 8,
+        "at": "2026-11-07T08:10:56.190544Z",
+        "step": "PATCH_VERIFY",
+        "level": "INFO",
+        "message": "candidate syntax checker finished",
+        "data": {
+          "attempt": 1,
+          "available": true,
+          "passed": true
+        }
+      },
+      {
+        "seq": 9,
+        "at": "2026-11-07T08:10:56.211935Z",
+        "step": "SANDBOX_DELETE",
+        "level": "INFO",
+        "message": "diagnosis workspace deleted",
+        "data": {
+          "pushed": false
+        }
+      }
+    ],
+    "apply-events.json": [
+      {
+        "seq": 1,
+        "at": "2026-11-07T08:10:56.212757Z",
+        "step": "INPUT_LOAD",
+        "level": "INFO",
+        "message": "apply input loaded",
+        "data": {
+          "inputHash": null,
+          "schemaVersion": 1,
+          "parentRunId": "902d36f2-a13e-436d-8493-6c5dca0772cf",
+          "patchId": "diagnosis-7f8e94bc9b8f1dc8",
+          "origin": "AI",
+          "files": [
+            "app/main.py"
+          ],
+          "branch": "applied/7a063465-3315-4482-b241-8f7b86f69511"
+        }
+      },
+      {
+        "seq": 2,
+        "at": "2026-11-07T08:10:56.212979Z",
+        "step": "INPUT_LOAD",
+        "level": "INFO",
+        "message": "patch hash verified",
+        "data": {
+          "patchHash": "sha256:7f8e94bc9b8f1dc843b6ab28a08e9daf9e8ada40c3dd9a119d5db61a74b4dab6",
+          "repo": "Softbank-Hackathon-2026-Team-Echo/echo-demo-app",
+          "sourceCommitSha": "53997e169a29604b37088b793425b7d72a7946bf"
+        }
+      },
+      {
+        "seq": 3,
+        "at": "2026-11-07T08:10:56.417300Z",
+        "step": "SANDBOX_CREATE",
+        "level": "INFO",
+        "message": "apply workspace created",
+        "data": {
+          "mode": "service-source",
+          "repo": "Softbank-Hackathon-2026-Team-Echo/echo-demo-app",
+          "baseCommit": "53997e169a29604b37088b793425b7d72a7946bf",
+          "credentials": "none"
+        }
+      },
+      {
+        "seq": 4,
+        "at": "2026-11-07T08:10:56.471794Z",
+        "step": "PATCH_VERIFY",
+        "level": "INFO",
+        "message": "patch applied",
+        "data": {
+          "files": [
+            "app/main.py"
+          ],
+          "appliedCommitSha": "5af306f429eda48a9753765cdbbf07de80ca130d",
+          "committed": true,
+          "pushed": false
+        }
+      },
+      {
+        "seq": 5,
+        "at": "2026-11-07T08:10:56.623602Z",
+        "step": "PATCH_VERIFY",
+        "level": "INFO",
+        "message": "build context ready",
+        "data": {
+          "sourceRepo": "Softbank-Hackathon-2026-Team-Echo/echo-demo-app",
+          "sourceCommit": "53997e169a29604b37088b793425b7d72a7946bf"
+        }
+      },
+      {
+        "seq": 6,
+        "at": "2026-11-07T08:10:57.052622Z",
+        "step": "PATCH_VERIFY",
+        "level": "INFO",
+        "message": "image built",
+        "data": {
+          "image": "echo-apply-7a0634653315:local",
+          "dockerVersion": "20.10.24+dfsg1",
+          "seconds": 0.4,
+          "pushed": false
+        }
+      },
+      {
+        "seq": 7,
+        "at": "2026-11-07T08:11:19.101391Z",
+        "step": "PATCH_VERIFY",
+        "level": "INFO",
+        "message": "image scanned",
+        "data": {
+          "trivyVersion": "0.76.2",
+          "fixableHigh": 0,
+          "fixableCritical": 0,
+          "criterion": "C-IMG-1: fixable HIGH/CRITICAL == 0"
+        }
+      },
+      {
+        "seq": 8,
+        "at": "2026-11-07T08:11:29.264248Z",
+        "step": "PATCH_VERIFY",
+        "level": "INFO",
+        "message": "healthz passed",
+        "data": {
+          "path": "/healthz",
+          "attempts": 3,
+          "network": "none"
+        }
+      },
+      {
+        "seq": 9,
+        "at": "2026-11-07T08:11:29.266573Z",
+        "step": "PATCH_VERIFY",
+        "level": "INFO",
+        "message": "apply checks passed",
+        "data": {
+          "appliedCommitSha": "5af306f429eda48a9753765cdbbf07de80ca130d",
+          "branch": "applied/7a063465-3315-4482-b241-8f7b86f69511",
+          "pushed": false
+        }
+      },
+      {
+        "seq": 10,
+        "at": "2026-11-07T08:11:29.821588Z",
+        "step": "SANDBOX_DELETE",
+        "level": "INFO",
+        "message": "apply workspace deleted",
+        "data": {
+          "containerRemoved": true,
+          "imageRemoved": true
+        }
+      }
+    ],
+    "startup.json": {
+      "exitCode": 1,
+      "logTail": [
+        "Traceback (most recent call last):",
+        "  File \"<frozen runpy>\", line 203, in _run_module_as_main",
+        "  File \"<frozen runpy>\", line 88, in _run_code",
+        "  File \"/app/app/__main__.py\", line 23, in <module>",
+        "    main()",
+        "    ~~~~^^",
+        "  File \"/app/app/__main__.py\", line 10, in main",
+        "    uvicorn.run(",
+        "    ~~~~~~~~~~~^",
+        "        \"app.main:create_app\",",
+        "        ^^^^^^^^^^^^^^^^^^^^^^",
+        "    ...<6 lines>...",
+        "        proxy_headers=True,",
+        "        ^^^^^^^^^^^^^^^^^^^",
+        "    )",
+        "    ^",
+        "  File \"/opt/venv/lib/python3.13/site-packages/uvicorn/main.py\", line 620, in run",
+        "    config.load_app()",
+        "    ~~~~~~~~~~~~~~~^^",
+        "  File \"/opt/venv/lib/python3.13/site-packages/uvicorn/config.py\", line 434, in load_app",
+        "    return import_from_string(self.app)",
+        "  File \"/opt/venv/lib/python3.13/site-packages/uvicorn/importer.py\", line 19, in import_from_string",
+        "    module = importlib.import_module(module_str)",
+        "  File \"/usr/local/lib/python3.13/importlib/__init__.py\", line 88, in import_module",
+        "    return _bootstrap._gcd_import(name[level:], package, level)",
+        "           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "  File \"<frozen importlib._bootstrap>\", line 1404, in _gcd_import",
+        "  File \"<frozen importlib._bootstrap>\", line 1369, in _find_and_load",
+        "  File \"<frozen importlib._bootstrap>\", line 1340, in _find_and_load_unlocked",
+        "  File \"<frozen importlib._bootstrap>\", line 935, in _load_unlocked",
+        "  File \"<frozen importlib._bootstrap_external>\", line 1023, in exec_module",
+        "  File \"<frozen importlib._bootstrap_external>\", line 1161, in get_code",
+        "  File \"<frozen importlib._bootstrap_external>\", line 1091, in source_to_code",
+        "  File \"<frozen importlib._bootstrap>\", line 488, in _call_with_frames_removed",
+        "  File \"/app/app/main.py\", line 213",
+        "    return FileResponse(INDEX_HTML, media_type=\"text/html; charset=utf-8\"",
+        "                       ^",
+        "SyntaxError: '(' was never closed"
+      ]
+    },
+    "fix.diff": "--- a/app/main.py\n+++ b/app/main.py\n@@ -210,6 +210,6 @@\n \n     @app.get(\"/\", include_in_schema=False)\n     async def index() -> FileResponse:\n-        return FileResponse(INDEX_HTML, media_type=\"text/html; charset=utf-8\"\n+        return FileResponse(INDEX_HTML, media_type=\"text/html; charset=utf-8\")\n \n     return app\n"
+  },
+  "gcpRuntime": {
+    "releaseBefore": "/opt/echo-ai-agent/releases/82aac70",
+    "releaseAfter": "/opt/echo-ai-agent/releases/82aac70",
+    "serviceAfter": "active",
+    "transferredSourceSha256": "6a73366199be9d7a1252c40514972602dc437e2dbef76dbde13202adfa06fff4"
+  },
+  "automatedTests": {
+    "passed": 451,
+    "skipped": 0,
+    "includesRealDocker": true
+  },
+  "wasSchemaValidation": {
+    "schema": "DiagnosisRunResultRequest",
+    "normalizedPatchStatus": "PROPOSED",
+    "httpIntegration": false
+  },
+  "limitations": [
+    "Approval is constructed by rehearsal script, not a person through WAS.",
+    "No GitHub push/PR creation, production deployment or database functional test.",
+    "Anthropic API is called from the controller; the model is not hosted in GCP Seoul."
+  ],
+  "rehearsalCorrections": [
+    "GCP transfer uses release Python 3.13 rather than system Python.",
+    "Rehearsal build explicitly enables BuildKit, matching ApplyRunner.",
+    "GCP invocation sets DOCKER_CONFIG and TRIVY_CACHE_DIR from existing systemd unit; no production config changed."
+  ],
+  "sourceSha256": {
+    "src/echo_agent/diagnosis.py": "b01959a7e96025ab5c8f61988191024f24a40812f426447a8648ce12b7480a3e",
+    "src/echo_agent/diagnosis_check.cjs": "f28fdbcac4874a5d7cfa347205da63a8a1be855defb8ecb94683e58372f6f379",
+    "src/echo_agent/diagnosis_check.py": "2b9fc2e5578a20a5072a7af6d8751f0dc09560dbeb9f1282735572c83e62f457",
+    "src/echo_agent/diagnosis_cli.py": "977e83ae0268ba2bd2b65999dfde0a5bf1a113d8bebd9b79cbf040e8d1983e47",
+    "src/echo_agent/diagnosis_demo.py": "898594e29e92df6a0ef8104668cd3194e0a47e9225b3e2c6033a9a0aedbac753",
+    "src/echo_agent/diagnosis_input.py": "f34377481a0339be6e9dda763652a499e89bb67a84621a54dfb33a02c1da531f",
+    "src/echo_agent/diagnosis_model.py": "a772a2dea0604fc5f7e8feb0c25c1be7d45689d0be3b2a4bd23dd8f6eb8eea17",
+    "src/echo_agent/diagnosis_python_check.py": "ba157f163808a317e3f6f52f5b8637604799aaf41e0d2aee5e03177ec8174b04",
+    "src/echo_agent/diagnosis_result.py": "8b850fde94440946a0be1fc493b0edc6fbdffe9c3984187c08fe3f342cc8deef",
+    "src/echo_agent/diagnosis_runner.py": "15ffdf352b3d5f5c86b88864ee72333d8fa6f3277f99e6cd6c78658616c6a9c2"
+  },
+  "postRehearsalValidation": {
+    "change": "Linear-time insertion check replaces SequenceMatcher; no additional model calls.",
+    "bothRecordedPatchesAcceptedByFinalGuard": true,
+    "wholeSuitePassed": 451
+  }
+}

@@ -12,6 +12,7 @@ from typing import Any, Protocol
 from echo_agent.diagnosis_check import CheckResult, DockerSyntaxChecker
 from echo_agent.diagnosis_input import (
     ALLOWED_FILE,
+    PYTHON_FILE,
     DiagnosisError,
     DiagnosisInput,
     Evidence,
@@ -43,12 +44,12 @@ class SyntaxChecker(Protocol):
     async def check(self, source: str, seconds: float) -> CheckResult: ...
 
 
-def unified_diff(original: str, patched: str) -> str:
+def unified_diff(original: str, patched: str, path: str = ALLOWED_FILE) -> str:
     lines = difflib.unified_diff(
         original.splitlines(keepends=True),
         patched.splitlines(keepends=True),
-        fromfile=f"a/{ALLOWED_FILE}",
-        tofile=f"b/{ALLOWED_FILE}",
+        fromfile=f"a/{path}",
+        tofile=f"b/{path}",
     )
     return "".join(
         line if line.endswith("\n") else line + "\n\\ No newline at end of file\n" for line in lines
@@ -86,7 +87,7 @@ class DiagnosisService:
         location: str = "local/development",
     ) -> None:
         self.model = model
-        self.checker = checker or DockerSyntaxChecker()
+        self.checker = checker
         self.location = location
 
     async def execute(
@@ -126,6 +127,9 @@ class DiagnosisService:
         try:
             budget(1)
             request = DiagnosisInput.parse(snapshot)
+            checker = self.checker or DockerSyntaxChecker(path=request.path)
+            python = request.path == PYTHON_FILE
+            language = "Python" if python else "JavaScript"
             result["simulated"] = request.simulated or self.model.simulated
             evidence = prepare_evidence(request)
             diagnosis = _empty_diagnosis(request, evidence)
@@ -143,8 +147,8 @@ class DiagnosisService:
                 return result
             before = None
             if request.source is not None and evidence.source_safe:
-                emit(RunStep.SANDBOX_CREATE, "checking original JavaScript syntax")
-                before = await self.checker.check(request.source, budget(30))
+                emit(RunStep.SANDBOX_CREATE, f"checking original {language} syntax")
+                before = await checker.check(request.source, budget(30))
                 diagnosis["verification"]["before"] = before.to_json()
                 emit(
                     RunStep.SANDBOX_DELETE,
@@ -170,6 +174,9 @@ class DiagnosisService:
             can_patch = bool(
                 before and before.available and not before.passed and evidence.source_safe
             )
+            repair_lines = (
+                frozenset(issue["line"] for issue in before.issues) if before else frozenset()
+            )
             feedback: dict[str, Any] | None = None
             for attempt in range(1, 3):
                 emit(RunStep.ANALYZE, "diagnosis model request", attempt=attempt)
@@ -178,6 +185,8 @@ class DiagnosisService:
                         **evidence.payload(),
                         "failure": request.failure,
                         "canPatch": can_patch,
+                        "repairTarget": request.path,
+                        "repairLines": sorted(repair_lines),
                         "repairFeedback": feedback,
                     },
                     ensure_ascii=False,
@@ -210,14 +219,16 @@ class DiagnosisService:
                     "promptVersion": PROMPT_VERSION,
                     "refusal": False,
                 }
-                answer = validate_answer(raw, request, evidence, can_patch=can_patch)
+                answer = validate_answer(
+                    raw, request, evidence, can_patch=can_patch, repair_lines=repair_lines
+                )
                 diagnosis.update(answer.analysis)
                 diagnosis["limitations"] = list(
                     dict.fromkeys(
                         [
                             *evidence.limitations,
                             *answer.analysis["limitations"],
-                            "JavaScript 문법만 확인했습니다. 빌드·Trivy·헬스체크·"
+                            f"{language} 문법만 확인했습니다. 빌드·Trivy·헬스체크·"
                             "브라우저 동작은 별도 검증이 필요합니다.",
                         ]
                     )
@@ -240,7 +251,7 @@ class DiagnosisService:
                     "diagnosis edit drafted; syntax verification pending",
                     attempt=attempt,
                 )
-                after = await self.checker.check(answer.patched, budget(30))
+                after = await checker.check(answer.patched, budget(30))
                 diagnosis["verification"]["after"] = after.to_json()
                 emit(
                     RunStep.PATCH_VERIFY,
@@ -252,7 +263,7 @@ class DiagnosisService:
                 if after.available and after.passed:
                     if request.source is None:
                         raise DiagnosisError("INPUT_INVALID")
-                    diff = unified_diff(request.source, answer.patched)
+                    diff = unified_diff(request.source, answer.patched, request.path)
                     if redact(diff) != diff:
                         raise DiagnosisError("PATCH_CONTAINS_SECRET")
                     digest = hashlib.sha256(diff.encode()).hexdigest()
@@ -260,7 +271,7 @@ class DiagnosisService:
                         {
                             "id": f"diagnosis-{digest[:16]}",
                             "patchHash": f"sha256:{digest}",
-                            "files": [ALLOWED_FILE],
+                            "files": [request.path],
                             "diff": diff,
                             "reason": diagnosis["reason"],
                             "touchesProtectedFiles": False,
@@ -274,11 +285,13 @@ class DiagnosisService:
                                 {
                                     "name": "POLICY",
                                     "result": "PASS",
-                                    "policyVersion": "diagnosis-v1",
-                                    "summary": "허용된 기존 inline JavaScript만 변경했습니다.",
+                                    "policyVersion": "diagnosis-v1.3",
+                                    "summary": "문법 오류 줄에 누락된 닫는 괄호만 추가했습니다."
+                                    if python
+                                    else "허용된 기존 inline JavaScript만 변경했습니다.",
                                 },
                                 {
-                                    "name": "JAVASCRIPT_SYNTAX",
+                                    "name": "PYTHON_SYNTAX" if python else "JAVASCRIPT_SYNTAX",
                                     "result": "PASS",
                                     "toolVersion": after.version,
                                     "summary": "같은 문법 검사에서 원본은 실패하고 수정본은 "
