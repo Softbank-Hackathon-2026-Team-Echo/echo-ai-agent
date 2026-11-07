@@ -1,0 +1,263 @@
+{
+  "checked_at": "2026-11-07T21:39:23.109061+09:00",
+  "decision": "HOLD_IAM_APPLY_UNTIL_BUILD_BOUNDARY_VERIFIED",
+  "iam_applied": false,
+  "production_finding_written": false,
+  "code": {
+    "infra_base": "be94262dbbf8a44889192bf5321fdc76fe066c83",
+    "was_candidate": "ba6538b219045101d6c6d1240311bea95e919cb1",
+    "runner_production": "0d10ac1"
+  },
+  "plan": {
+    "mutations": 1,
+    "actions": [
+      "create"
+    ],
+    "grant": {
+      "project": "team-echo-final",
+      "location": "asia-northeast3",
+      "repository": "echo",
+      "role": "roles/artifactregistry.reader",
+      "member": "serviceAccount:echo-sandbox-runner@team-echo-final.iam.gserviceaccount.com"
+    },
+    "source_sha256": "ecd586f101933ba28a68fc8c26c6777e3ff9845c8aaf65b905ba5b29ca86c213"
+  },
+  "role": {
+    "name": "roles/artifactregistry.reader",
+    "included_permissions": [
+      "artifactregistry.attachments.get",
+      "artifactregistry.attachments.list",
+      "artifactregistry.dockerimages.get",
+      "artifactregistry.dockerimages.list",
+      "artifactregistry.files.download",
+      "artifactregistry.files.get",
+      "artifactregistry.files.list",
+      "artifactregistry.locations.get",
+      "artifactregistry.locations.list",
+      "artifactregistry.mavenartifacts.get",
+      "artifactregistry.mavenartifacts.list",
+      "artifactregistry.npmpackages.get",
+      "artifactregistry.npmpackages.list",
+      "artifactregistry.packages.get",
+      "artifactregistry.packages.list",
+      "artifactregistry.projectconfigs.get",
+      "artifactregistry.projectsettings.get",
+      "artifactregistry.pythonpackages.get",
+      "artifactregistry.pythonpackages.list",
+      "artifactregistry.repositories.downloadArtifacts",
+      "artifactregistry.repositories.exportArtifacts",
+      "artifactregistry.repositories.get",
+      "artifactregistry.repositories.list",
+      "artifactregistry.repositories.listEffectiveTags",
+      "artifactregistry.repositories.listTagBindings",
+      "artifactregistry.repositories.readViaVirtualRepository",
+      "artifactregistry.rules.get",
+      "artifactregistry.rules.list",
+      "artifactregistry.tags.get",
+      "artifactregistry.tags.list",
+      "artifactregistry.versions.get",
+      "artifactregistry.versions.list",
+      "resourcemanager.projects.get"
+    ],
+    "scope_limit": "Repository echo, all contained images; not per customer service or digest"
+  },
+  "trivy": {
+    "version": "0.75.0",
+    "before": [
+      {
+        "id": "GCP-0014",
+        "severity": "MEDIUM",
+        "resource": "google_sql_database_instance.testdb"
+      },
+      {
+        "id": "GCP-0016",
+        "severity": "MEDIUM",
+        "resource": "google_sql_database_instance.testdb"
+      },
+      {
+        "id": "GCP-0020",
+        "severity": "MEDIUM",
+        "resource": "google_sql_database_instance.testdb"
+      },
+      {
+        "id": "GCP-0022",
+        "severity": "MEDIUM",
+        "resource": "google_sql_database_instance.testdb"
+      },
+      {
+        "id": "GCP-0024",
+        "severity": "MEDIUM",
+        "resource": "google_sql_database_instance.testdb"
+      },
+      {
+        "id": "GCP-0025",
+        "severity": "MEDIUM",
+        "resource": "google_sql_database_instance.testdb"
+      },
+      {
+        "id": "GCP-0029",
+        "severity": "LOW",
+        "resource": "google_compute_subnetwork.this"
+      },
+      {
+        "id": "GCP-0033",
+        "severity": "LOW",
+        "resource": "google_compute_instance.runner"
+      },
+      {
+        "id": "GCP-0076",
+        "severity": "MEDIUM",
+        "resource": "google_compute_subnetwork.this"
+      }
+    ],
+    "after": [
+      {
+        "id": "GCP-0014",
+        "severity": "MEDIUM",
+        "resource": "google_sql_database_instance.testdb"
+      },
+      {
+        "id": "GCP-0016",
+        "severity": "MEDIUM",
+        "resource": "google_sql_database_instance.testdb"
+      },
+      {
+        "id": "GCP-0020",
+        "severity": "MEDIUM",
+        "resource": "google_sql_database_instance.testdb"
+      },
+      {
+        "id": "GCP-0022",
+        "severity": "MEDIUM",
+        "resource": "google_sql_database_instance.testdb"
+      },
+      {
+        "id": "GCP-0024",
+        "severity": "MEDIUM",
+        "resource": "google_sql_database_instance.testdb"
+      },
+      {
+        "id": "GCP-0025",
+        "severity": "MEDIUM",
+        "resource": "google_sql_database_instance.testdb"
+      },
+      {
+        "id": "GCP-0029",
+        "severity": "LOW",
+        "resource": "google_compute_subnetwork.this"
+      },
+      {
+        "id": "GCP-0033",
+        "severity": "LOW",
+        "resource": "google_compute_instance.runner"
+      },
+      {
+        "id": "GCP-0076",
+        "severity": "MEDIUM",
+        "resource": "google_compute_subnetwork.this"
+      }
+    ],
+    "new_findings": [],
+    "report_sha256": {
+      "before": "8d3e0bf0ddaa7db9fa2d6c70853012dbe807164598d3c0442e75daee306f359f",
+      "after": "d18193d2449a0180a1128e269a93582d09f82984de11973a0f8997317c719db7"
+    }
+  },
+  "local_rule_calculation": {
+    "before": {
+      "result": "WARN",
+      "reason": "MISCONFIGURATION_WARNING",
+      "item_count": 9,
+      "policy_version": "sec-rules-2026.11.06"
+    },
+    "after": {
+      "result": "WARN",
+      "reason": "MISCONFIGURATION_WARNING",
+      "item_count": 9,
+      "policy_version": "sec-rules-2026.11.06"
+    },
+    "C-CFG-1": {
+      "mandatory": false,
+      "sources": [
+        "TRIVY_CONFIG"
+      ],
+      "scope_keys": [
+        "CONFIG_COMMIT"
+      ]
+    },
+    "C-IAM-1": {
+      "mandatory": false,
+      "sources": [
+        "CLOUD_API",
+        "MANUAL_REVIEW"
+      ],
+      "scope_keys": [
+        "ENVIRONMENT"
+      ]
+    },
+    "C-IAM-2": {
+      "mandatory": true,
+      "sources": [
+        "AUDIT_LOG",
+        "WAS_TEST"
+      ],
+      "scope_keys": [
+        "WAS_VERSION"
+      ]
+    }
+  },
+  "runtime_probe": {
+    "base_image": "sha256:c0e8df9380519cf514d5fbb5aeaa7aa5de5f32c50330badcadc05cdabaae5566",
+    "credential_endpoint_accessed": false,
+    "probe_endpoint": "instance/hostname",
+    "response_body_recorded": false,
+    "results": [
+      {
+        "build_error_tail": null,
+        "exit_code": 0,
+        "phase": "build_default",
+        "probe_lines": [
+          "#7 0.987 ECHO_BOUNDARY_PROBE={\"metadata_accessible\": true, \"metadata_http_status\": 200}"
+        ]
+      },
+      {
+        "build_error_tail": null,
+        "exit_code": 0,
+        "phase": "build_network_none",
+        "probe_lines": [
+          "#7 0.554 ECHO_BOUNDARY_PROBE={\"error_type\": \"URLError\", \"metadata_accessible\": false}"
+        ]
+      },
+      {
+        "exit_code": 0,
+        "phase": "health_runtime_network_none",
+        "probe_lines": [
+          "ECHO_BOUNDARY_PROBE={\"error_type\": \"URLError\", \"metadata_accessible\": false}"
+        ]
+      }
+    ]
+  },
+  "tests": {
+    "passed": 76,
+    "skipped": 0,
+    "seconds": 5.46,
+    "paths": [
+      "tests/test_security_normalizers.py",
+      "tests/test_platform_self_test.py",
+      "tests/integration/test_platform_self_test.py"
+    ],
+    "database": "isolated local PostgreSQL, port 55434"
+  },
+  "runtime_after": {
+    "release": "0d10ac1",
+    "service": "active",
+    "temporary_probe_images_remaining": 0
+  },
+  "limits": [
+    "No token, identity-token, secret or credential endpoint requested. HTTP 200 was for hostname only.",
+    "No IAM grant or access-after-grant test.",
+    "C-IAM-2 automatic self-test covers WAS API agent write denial, not VM metadata/build isolation.",
+    "Local C-CFG-1 calculation was not persisted as a production finding.",
+    "Complete infrastructure or migration security acceptance is not claimed."
+  ]
+}
