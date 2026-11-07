@@ -219,3 +219,7 @@ sudo ln -sfn /opt/echo-ai-agent/releases/<이전 sha> /opt/echo-ai-agent/current
 - 모델이 고른 명령은 작업 공간 컨테이너 안 `sh -c`에서만 돈다. 호스트는 셸을 거치지 않는다.
 - 작업 공간에는 네트워크·키·토큰·볼륨·Docker 소켓이 없다.
 - 의존성은 `exclude-newer` 날짜 이전 배포본만 쓰고, 액션·이미지는 SHA·digest로 고정한다.
+
+## CVE 의존성 수정 (#27)
+
+선택 SBOM 전달 및 Python+uv 버전 수정은 [계약](specs/ai-27-cve-remediation.md)과 [인수 실행 안내](docs/cve-remediation-runbook.md)를 따른다. 기본 off이며 WAS 수신 계약과 GAR reader를 먼저 준비한다. 전체 기능 호환성 검증은 [후속](docs/cve-functional-compatibility-followup.md)이다.

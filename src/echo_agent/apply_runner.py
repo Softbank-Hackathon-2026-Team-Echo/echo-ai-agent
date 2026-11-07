@@ -340,7 +340,7 @@ def check_real_targets(root: Path, names: Sequence[str]) -> None:
             raise _ApplyFailed(FAILURE_PATCH_TARGET_FORBIDDEN, "REAL_PATH_OUTSIDE_SCENARIOS")
 
 
-def check_service_target(files: Sequence[str], diff: str) -> None:
+def check_service_target(files: Sequence[str], diff: str, *, cve: bool = False) -> None:
     """서비스 저장소 패치(배포 실패 진단)의 경로 검사.
 
     `files` 와 diff 머리 경로가 같은 집합이고, `..`·절대 경로·숨김 경로(`.github/` 등)·안전하지
@@ -348,7 +348,10 @@ def check_service_target(files: Sequence[str], diff: str) -> None:
     """
     if set(diff_paths(diff)) != set(files):
         raise _ApplyFailed(FAILURE_PATCH_TARGET_FORBIDDEN, "FILES_DIFF_MISMATCH")
-    if redact(diff) != diff:
+    from echo_agent.cve_policy import dependency_diff_is_safe
+
+    safe = dependency_diff_is_safe(diff) if cve else redact(diff) == diff
+    if not safe:
         raise _ApplyFailed(FAILURE_PATCH_TARGET_FORBIDDEN, "SECRET_IN_DIFF")
     for path in files:
         if sensitive_source_path(path):
@@ -712,7 +715,9 @@ class ApplyRunner:
                 raise _ApplyFailed(FAILURE_PATCH_HASH_MISMATCH, "HASH_MISMATCH")
             if spec.source_commit is not None:
                 # 배포 실패 진단의 패치: 서비스 저장소의 실패 커밋에서 적용·빌드·스캔·healthz.
-                check_service_target(spec.files, spec.diff)
+                check_service_target(
+                    spec.files, spec.diff, cve=run.input_snapshot.get("trigger") == "CVE_WATCH"
+                )
                 events.add(
                     RunStep.INPUT_LOAD,
                     "patch hash verified",
@@ -972,6 +977,41 @@ class ApplyRunner:
                 repo=spec.repo,
             )
             raise _ApplyFailed(FAILURE_SOURCE_UNAVAILABLE, "FETCH") from error
+        if run.input_snapshot.get("trigger") == "CVE_WATCH":
+            from echo_agent.cve_policy import FILES, target_advisory_present
+            from echo_agent.sbom import checked_image_ref
+
+            if (
+                os.environ.get("ECHO_CVE_REMEDIATION", "off") != "on"
+                or not set(spec.files) <= FILES
+            ):
+                raise _ApplyFailed(FAILURE_INPUT_INVALID, "CVE_SCOPE_REJECTED")
+            snapshot = run.input_snapshot
+            try:
+                ref = checked_image_ref(snapshot.get("imageRef"), snapshot.get("imageDigest"))
+                if not snapshot["finding"].get("synthetic"):
+                    baseline = self._run(
+                        [
+                            "trivy",
+                            "image",
+                            "--scanners",
+                            "vuln",
+                            "--format",
+                            "json",
+                            "--quiet",
+                            ref,
+                        ],
+                        self._budget(run, 120),
+                        None,
+                    )
+                    if baseline.returncode != 0 or not target_advisory_present(
+                        json.loads(baseline.stdout),
+                        snapshot["finding"],
+                        snapshot["remediation"]["package"],
+                    ):
+                        raise ValueError("ADVISORY_NOT_OBSERVED_IN_BASELINE")
+            except (ValueError, KeyError, TypeError) as exc:
+                raise _ApplyFailed(FAILURE_IMAGE_SCAN_FAILED, "BASELINE_NOT_VERIFIED") from exc
         use_git = shutil.which("git") is not None
         git_dir = workspace.root / "git"
         events.add(
@@ -1014,6 +1054,32 @@ class ApplyRunner:
             raise
         if use_git:
             self._service_commit(run, source, git_dir, f"base: {spec.repo}@{spec.source_commit}")
+        if run.input_snapshot.get("trigger") == "CVE_WATCH":
+            from packaging.requirements import Requirement
+            from packaging.utils import canonicalize_name
+
+            from echo_agent.cve_policy import (
+                lock_versions,
+                project_dependencies,
+                validate_manifest_change,
+            )
+
+            try:
+                original_manifest = (source / "pyproject.toml").read_text()
+                validate_manifest_change(
+                    original_manifest,
+                    patched.get("pyproject.toml", original_manifest),
+                    {
+                        canonicalize_name(Requirement(dep).name)
+                        for dep in project_dependencies(original_manifest)
+                    },
+                )
+                lock = patched.get("uv.lock", (source / "uv.lock").read_text())
+                remediation = run.input_snapshot["remediation"]
+                if lock_versions(lock, remediation["package"]) != {remediation["toVersion"]}:
+                    raise ValueError("TARGET_VERSION_MISMATCH")
+            except (ValueError, OSError) as exc:
+                raise _ApplyFailed(FAILURE_INPUT_INVALID, "CVE_MANIFEST_REJECTED") from exc
         for name, text in patched.items():
             (source / name).write_bytes(text.encode("utf-8"))
         commit_sha: str | None = None
@@ -1232,6 +1298,7 @@ class ApplyRunner:
                 "image",
                 "--scanners",
                 "vuln",
+                *(["--list-all-pkgs"] if run.input_snapshot.get("trigger") == "CVE_WATCH" else []),
                 "--format",
                 "json",
                 "--quiet",
@@ -1258,6 +1325,43 @@ class ApplyRunner:
                 tail=_tail(scanned.stderr),
             )
             raise _ApplyFailed(FAILURE_IMAGE_SCAN_FAILED, "SCAN_ERROR")
+        if run.input_snapshot.get("trigger") == "CVE_WATCH":
+            from echo_agent.cve_policy import verify_target_report
+
+            try:
+                verify_target_report(report, dict(run.input_snapshot))
+            except ValueError as exc:
+                raise _ApplyFailed(FAILURE_IMAGE_SCAN_FAILED, str(exc)) from exc
+            # Check the installed runtime metadata independently of the scanner inventory.
+            remediation = run.input_snapshot["remediation"]
+            probe = (
+                "import importlib.metadata as m,sys; "
+                f"sys.exit(0 if m.version({remediation['package']!r}) == "
+                f"{remediation['toVersion']!r} else 1)"
+            )
+            installed = self._run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    "--read-only",
+                    "--cap-drop",
+                    "ALL",
+                    "--security-opt",
+                    "no-new-privileges",
+                    "--entrypoint",
+                    "python",
+                    workspace.image_tag,
+                    "-c",
+                    probe,
+                ],
+                self._budget(run, 20),
+                None,
+            )
+            if installed.returncode != 0:
+                raise _ApplyFailed(FAILURE_IMAGE_SCAN_FAILED, "INSTALLED_VERSION_MISMATCH")
         fixable = count_fixable(report)
         total_fixable = sum(fixable.values())
         events.add(

@@ -5,6 +5,8 @@ description = "EchoPort AI 에이전트 러너: 샌드박스에서 점검·수�
 requires-python = ">=3.13"
 dependencies = [
     "anthropic==1.17.0",
+    "packaging==26.3",
+    "uv==0.8.17",
 ]
 
 [dependency-groups]

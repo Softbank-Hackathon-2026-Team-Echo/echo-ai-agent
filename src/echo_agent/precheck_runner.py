@@ -265,6 +265,20 @@ def process_run(
         # reviewer 가 없으면(--no-model) 진단도 규칙만 쓴다.
         diagnosis_beat = Heartbeat(client, run, interval=heartbeat_interval, log=log)
         diagnosis_events = _EventSender(client, run, log)
+        if run.input_snapshot.get("trigger") == "CVE_WATCH":
+            from echo_agent.cve_runner import process_cve_run
+
+            return RunOutcome(
+                *process_cve_run(
+                    client,
+                    run,
+                    diagnosis_beat,
+                    diagnosis_events,
+                    model=diagnoser.model if diagnoser else None,
+                    clock=clock,
+                    log=log,
+                )
+            )
         run_id, status, failure, submitted, diagnosis_review = process_diagnosis_run(
             client,
             run,
@@ -311,6 +325,11 @@ def process_run(
             patches=patches,
             processing=processing,
         )
+        if os.getenv("ECHO_SBOM", "off") == "on" and not heartbeat.lost.is_set():
+            from echo_agent.sbom import attach_sbom, collect_sbom
+
+            attach_sbom(result, collect_sbom(run, sender.events, clock=clock), sender.events)
+            sender.flush()
         stored = _submit_or_resend_without_patches(client, run, result, sender)
         return RunOutcome(
             run.id, stored or status, failure_code, submitted=True, review=review_status
