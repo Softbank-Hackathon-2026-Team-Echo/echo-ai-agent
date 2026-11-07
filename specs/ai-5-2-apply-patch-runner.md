@@ -1,5 +1,7 @@
 # AI 에이전트 5-2 초안 — 러너가 승인된 패치를 샌드박스에서 적용·빌드·스캔해 결과를 낸다 (S2-apply)
 
+> **2026-11-07 후속:** 아래는 구현 당시 기록이다. 현재 5개 결과 필드·null 허용·push 없는 성공 의미·실패 코드는 [부록 A 4절·6.2절](ai-1-appendix-a-was-runner-contract.md#4-ai-패치-승인샌드박스-반영)로 정리했다. 아래의 두 필드 요약·미배포·미회신 표기는 당시 상태이며 최신 계약이나 운영 상태가 아니다. 추가 필드 적용 순서는 [결과 상세 v1.1 검토안](ai-apply-result-details-v1.1.md)에 있으며 WAS 수용 전에는 전송하지 않는다.
+
 - 상태: Draft (지민 결정 11/6 10:5x "P2 지금 진행"). 형래님 영역이라 Draft PR, 병합은 형래님.
 - 이슈: https://github.com/Softbank-Hackathon-2026-Team-Echo/echo-ai-agent/issues/6 (패치 승인·반영의 러너 쪽)
 - 기준: echo-ai-agent main `db53d1c`(#17 병합 뒤). 지민 Draft PR #18(`feat/rule-patch-proposal` `4da7587`, 규칙 패치 제안)은 미병합 — 이 PR 은 #18 이 고치는 줄을 건드리지 않는다(아래 7절, `git merge-tree` 충돌 0 확인).

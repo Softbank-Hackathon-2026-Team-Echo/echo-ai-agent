@@ -195,10 +195,12 @@ sudo ln -sfn /opt/echo-ai-agent/releases/<이전 sha> /opt/echo-ai-agent/current
 
 ## 승인된 패치 반영 (APPLY_PATCH, 기본 꺼짐)
 
+현재 결과 계약은 [부록 A 4절](specs/ai-1-appendix-a-was-runner-contract.md#4-ai-패치-승인샌드박스-반영)을 따른다. SUCCEEDED는 샌드박스 검증 완료이며 원격 반영·실제 배포 완료와 구분한다. [결과 상세 v1.1 검토안](specs/ai-apply-result-details-v1.1.md)은 WAS가 먼저 수용한 뒤 러너에 적용한다.
+
 사람이 승인한 패치(WAS `PATCH_APPLY_ENABLED` 가 켜져 있을 때 생기는 `APPLY_PATCH` 실행)를 샌드박스에서 시나리오 사본에 적용하고, 이미지를 빌드해 Trivy(C-IMG-1 기준: 수정 가능한 HIGH·CRITICAL 0)로 보고, 앱을 `--network none` 으로 띄워 `/healthz` 를 본 뒤 결과 `{status, failureCode, simulated, appliedCommitSha, branch}` 를 낸다. **브랜치·이미지를 push 하지 않는다**(샌드박스는 읽기 자격만). 설계·실패 코드·계약 보완 목록: SPEC [`ai-5-2`](specs/ai-5-2-apply-patch-runner.md), 운영 안내 [`docs/apply-patch-runner.md`](docs/apply-patch-runner.md).
 
 - 스위치 `ECHO_APPLY_PATCH=on|off`(기본 off). 꺼져 있으면 claim 이 지금과 같은 `["PRECHECK"]` 이다. 오타면 종료 코드 2. 시작 로그 `apply patch: on|off`.
-- docker·trivy 가 없으면 PASS 를 만들지 않고 `FAILED`·`VERIFY_UNAVAILABLE` 로 낸다. 지금 VM 은 러너 사용자에게 docker 권한이 없고 trivy·git 이 없어 켜지 않는다(켜는 절차는 SPEC 10절, 인프라 승인 필요).
+- docker·trivy 가 없으면 PASS 를 만들지 않고 `FAILED`·`VERIFY_UNAVAILABLE` 로 낸다. 실행할 VM의 도구·권한과 배포 버전을 확인한다(켜는 절차는 SPEC 10절). 과거 도구 미설치 메모는 현재 운영 상태의 근거로 쓰지 않는다.
 - 로컬 확인(가짜 WAS·시나리오 사본이 있는 체크아웃 필요):
 
   ```bash
