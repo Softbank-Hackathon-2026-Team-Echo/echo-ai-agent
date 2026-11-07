@@ -35,10 +35,10 @@ uv run pytest
 
 Docker가 있어야 실제 격리 시험이 실행된다. skip을 성공으로 세지 않는다. 주요 전송 경계는 `tests/test_runner_delivery.py`다.
 
-`tools/contract_was_delivery.py`는 WAS의 실제 ASGI·인증·스키마·PostgreSQL 저장을 쓰는 교차 저장소 계약 시험이다. WAS main `87966f7`의 **격리 checkout**에 `tests/integration/test_runner_delivery_contract.py`로 복사하고, 그 checkout의 venv에서 이 러너 패키지와 의존성을 import할 수 있게 구성한 뒤 실행한다. 기존 팀원의 checkout이나 운영 DB를 사용하지 않는다. WAS `tests/conftest.py`가 만드는 `_test` DB도 반드시 전용 로컬 DB로 한정한다.
+`tools/contract_was_delivery.py`는 WAS의 실제 ASGI·인증·스키마·PostgreSQL 저장을 쓰는 교차 저장소 계약 시험이다. WAS main `87966f7`의 **격리 checkout**에 `tests/integration/test_runner_delivery_contract.py`로 복사하고, 그 checkout의 venv에서 이 러너 패키지와 의존성을 import할 수 있게 구성한 뒤 실행한다. 기존 팀원의 checkout이나 운영 DB를 사용하지 않는다. WAS `tests/integration/conftest.py`가 만드는 `_test` DB도 반드시 전용 로컬 DB로 한정한다.
 
 ```sh
-DATABASE_URL=postgresql+asyncpg://echo_delivery_test@127.0.0.1:55561/echo_delivery_test \
+TEST_DATABASE_URL=postgresql+asyncpg://echo_delivery_test@127.0.0.1:55561/echo_delivery_test \
   .venv/bin/pytest -q tests/integration/test_runner_delivery_contract.py
 ```
 
@@ -59,3 +59,5 @@ uv run python tools/verify_python_syntax_pair.py /path/to/echo-demo-app \
 CI 통과 커밋을 기존 README의 고정 release 배포 절차로 배포한다. 진행 작업을 확인하고 기존 프로세스가 종료된 후 링크를 바꾼다. 유닛·모델·스위치·권한은 유지한다. 문제가 있으면 이전 `0d10ac1` release로 되돌린다.
 
 이 코드의 시험/배포 완료는 사용자 화면의 전체 인수 완료가 아니다. #135 계약 소비, 같은 화면의 실제 수정 커밋 재배포·최종 성공·/healthz·대표 페이지를 별도 확인한다. 전체 기능 호환성을 보장하지 않는다.
+
+최종 검증과 전달 상태는 [검증 보고서](runner-delivery-verification.md), 화면 인수·회신 내용은 [인계 문서](runner-delivery-handoff.md)를 따른다. 11/08 사용자 지시로 이번에는 브랜치 커밋/푸시와 댓글까지만 진행하고 PR 병합·운영 release 전환은 하지 않는다.
