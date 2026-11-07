@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "purpose": "error-diagnosis.v1",
+  "deployRequestId": "synthetic-fixture",
+  "environment": "fixture",
+  "sourceCommit": "1111111111111111111111111111111111111111",
+  "simulated": true,
+  "allowedFiles": [
+    "app/static/index.html"
+  ],
+  "sourceFiles": [
+    {
+      "path": "app/static/index.html",
+      "content": "<!doctype html>\n<html lang=\"en\">\n<body><output id=\"counter\"></output>\n<script>\nconst counter = ;\ndocument.getElementById(\"counter\").textContent = String(counter);\n</script>\n</body></html>\n"
+    }
+  ],
+  "failure": {
+    "code": "BUILD_FAILED",
+    "exitCode": 1
+  },
+  "logs": [
+    {
+      "id": "build",
+      "stage": "build",
+      "sourceLineStart": null,
+      "truncated": false,
+      "lines": [
+        "app/static/index.html:5: SyntaxError: Unexpected token ';'"
+      ]
+    }
+  ]
+}

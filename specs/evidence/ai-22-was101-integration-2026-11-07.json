@@ -1,0 +1,202 @@
+{
+  "at": "2026-11-06T19:03:51.899476+00:00",
+  "sourceCommit": "9a7ac99b13a1b8cf8fefc91dc596c46b16eab397",
+  "syntheticInput": true,
+  "sourceTransport": "injected local git object reader; no live WAS/HTTP or repository write",
+  "modelCalls": [
+    {
+      "seconds": 7.677,
+      "model": "claude-opus-5-5",
+      "requestId": "req_011CgnCDcyLnWS8y89554aR6",
+      "inputTokens": 21231,
+      "outputTokens": 571
+    }
+  ],
+  "seconds": 9.626,
+  "status": "SUCCEEDED",
+  "failureCode": null,
+  "diagnosis": {
+    "result": "DIAGNOSED",
+    "category": "CODE",
+    "cause": "app/static/index.html 160번째 줄의 fetchJson 함수 선언에서 매개변수 목록을 닫는 괄호 ')'가 빠져 있어 SyntaxError: Unexpected token '{'가 발생했습니다.",
+    "fixable": true,
+    "unfixableReason": null,
+    "evidence": [
+      {
+        "source": "LOG",
+        "line": 1,
+        "text": "app/static/index.html:160: SyntaxError: Unexpected token '{'"
+      },
+      {
+        "source": "FILE",
+        "line": 160,
+        "text": "  async function fetchJson(url, options, timeoutMs {",
+        "path": "app/static/index.html"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "name": "DIFF_APPLIES",
+      "result": "PASS",
+      "summary": "원본 코드에 수정안을 정확히 적용할 수 있습니다."
+    },
+    {
+      "name": "POLICY",
+      "result": "PASS",
+      "policyVersion": "diagnosis-v1",
+      "summary": "허용된 기존 inline JavaScript만 변경했습니다."
+    },
+    {
+      "name": "JAVASCRIPT_SYNTAX",
+      "result": "PASS",
+      "toolVersion": "v24.22.2",
+      "summary": "같은 문법 검사에서 원본은 실패하고 수정본은 통과했습니다."
+    },
+    {
+      "name": "GIT_APPLY",
+      "result": "PASS",
+      "summary": "실패 커밋 적용 및 엄격한 적용기와의 일치를 확인했습니다."
+    }
+  ],
+  "fixedEqualsBaseline": true,
+  "containers": [
+    {
+      "name": "echo-ws-syntax-a8d522b45ce0",
+      "network": "none",
+      "readOnly": true,
+      "user": "65532:65532",
+      "capDrop": [
+        "ALL"
+      ],
+      "securityOpt": [
+        "no-new-privileges"
+      ],
+      "binds": null,
+      "environmentKeys": [
+        "HOME",
+        "PATH",
+        "NODE_VERSION",
+        "YARN_VERSION"
+      ]
+    },
+    {
+      "name": "echo-ws-syntax-001247e6f02c",
+      "network": "none",
+      "readOnly": true,
+      "user": "65532:65532",
+      "capDrop": [
+        "ALL"
+      ],
+      "securityOpt": [
+        "no-new-privileges"
+      ],
+      "binds": null,
+      "environmentKeys": [
+        "HOME",
+        "PATH",
+        "NODE_VERSION",
+        "YARN_VERSION"
+      ]
+    },
+    {
+      "name": "echo-ws-syntax-a9a555eb275e",
+      "network": "none",
+      "readOnly": true,
+      "user": "65532:65532",
+      "capDrop": [
+        "ALL"
+      ],
+      "securityOpt": [
+        "no-new-privileges"
+      ],
+      "binds": null,
+      "environmentKeys": [
+        "HOME",
+        "PATH",
+        "NODE_VERSION",
+        "YARN_VERSION"
+      ]
+    },
+    {
+      "name": "echo-ws-syntax-4049443b5914",
+      "network": "none",
+      "readOnly": true,
+      "user": "65532:65532",
+      "capDrop": [
+        "ALL"
+      ],
+      "securityOpt": [
+        "no-new-privileges"
+      ],
+      "binds": null,
+      "environmentKeys": [
+        "HOME",
+        "PATH",
+        "NODE_VERSION",
+        "YARN_VERSION"
+      ]
+    }
+  ],
+  "remaining": [],
+  "productionChanged": false,
+  "fullAppRuntimeChecked": false,
+  "sourceBaseline": "echo-demo-app@d856a1d13f19aa219ebba117c29561f838da9fe4",
+  "wasSchema": {
+    "wasCommit": "62dfe5e6ad3d8179e5efa8bef460da239434c736",
+    "validated": true,
+    "normalizedPatchStates": [
+      "PROPOSED"
+    ]
+  },
+  "syntheticResultCases": {
+    "verified": {
+      "status": "SUCCEEDED",
+      "patchStates": [
+        "PROPOSED"
+      ]
+    },
+    "rules": {
+      "status": "SUCCEEDED",
+      "patchStates": []
+    },
+    "refused": {
+      "status": "FAILED",
+      "patchStates": []
+    },
+    "no_logs": {
+      "status": "SUCCEEDED",
+      "patchStates": []
+    },
+    "insufficient": {
+      "status": "SUCCEEDED",
+      "patchStates": []
+    },
+    "invalid": {
+      "status": "FAILED",
+      "patchStates": []
+    }
+  },
+  "fullTests": {
+    "passed": 431,
+    "skipped": 0,
+    "includesDocker": true
+  },
+  "publicSourceFetch": {
+    "repo": "Softbank-Hackathon-2026-Team-Echo/echo-demo-app",
+    "commitSha": "d856a1d13f19aa219ebba117c29561f838da9fe4",
+    "selectedFiles": 30,
+    "htmlLines": 368,
+    "verified": true
+  },
+  "package": {
+    "sdistBuilt": true,
+    "wheelBuilt": true,
+    "diagnosisModulesAndNodeCheckerIncluded": true
+  },
+  "limitations": [
+    "Actual Claude response; synthetic failed deployment and local Git source transport.",
+    "No live WAS HTTP/DB, approval, service image build/Trivy/healthz or production redeploy tested.",
+    "No production runtime or switches changed."
+  ]
+}

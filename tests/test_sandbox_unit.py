@@ -1,6 +1,7 @@
 """샌드박스 설정·경로·출력 자르기(Docker 없이)."""
 
 import asyncio
+import sys
 
 import pytest
 
@@ -72,6 +73,29 @@ async def test_read_limited_short_output_is_not_truncated() -> None:
     reader.feed_data(b"ok")
     reader.feed_eof()
     assert await _read_limited(reader, 10) == ("ok", False)
+
+
+async def test_cancelling_docker_cli_reaps_owned_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    spawned: list[asyncio.subprocess.Process] = []
+    started = asyncio.Event()
+    original = asyncio.create_subprocess_exec
+
+    async def capture(*args: object, **kwargs: object) -> asyncio.subprocess.Process:
+        process = await original(*args, **kwargs)  # type: ignore[arg-type]
+        spawned.append(process)
+        started.set()
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", capture)
+    sandbox = DockerSandbox("owned-child", docker=sys.executable)
+    task = asyncio.create_task(
+        sandbox._docker_call(["-c", "import time; time.sleep(30)"], deadline_seconds=40)
+    )
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert spawned[0].returncode is not None
 
 
 def test_event_log_numbers_events_and_clips_long_text() -> None:

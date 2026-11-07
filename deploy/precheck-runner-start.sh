@@ -37,6 +37,17 @@ case "${ECHO_PRECHECK_PATCH:-off}" in
     ;;
 esac
 
+case "${ECHO_DIAGNOSIS:-off}" in
+  on)
+    export ECHO_DIAGNOSIS=on
+    ;;
+  off) ;;
+  *)
+    echo "ECHO_DIAGNOSIS must be on or off" >&2
+    exit 2
+    ;;
+esac
+
 read_secret() {
   gcloud secrets versions access latest --secret="$1" --project="$ECHO_GCP_PROJECT" --quiet
 }
