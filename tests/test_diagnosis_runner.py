@@ -434,7 +434,11 @@ def test_failure_does_not_reclassify_as_precheck(
         _client(fake), _claimed(_snapshot()), diagnoser=diagnoser, log=lambda _: None
     )
     assert not outcome.submitted
-    assert len(fake.bodies("result")) == 1 and "diagnosis" in fake.bodies("result")[0]
+    sent = fake.bodies("result")
+    assert len(sent) == 2 and "diagnosis" in sent[0]
+    assert sent[1]["status"] == "FAILED" and sent[1]["failureCode"] == "RUNNER_ERROR"
+    assert sent[1]["patches"] == [] and "diagnosis" not in sent[1]
+    assert outcome.status == "UNCONFIRMED"
 
 
 def test_claim_and_submit_use_was_contract(monkeypatch: pytest.MonkeyPatch) -> None:

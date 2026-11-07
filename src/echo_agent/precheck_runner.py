@@ -65,6 +65,7 @@ from echo_agent.was_client import (
     WasClient,
     WasConfigError,
     WasError,
+    event_batches,
 )
 
 DEFAULT_RUNNER_NAME = "echo-sandbox-runner"
@@ -101,7 +102,7 @@ def _stderr(message: str) -> None:
 @dataclass(frozen=True)
 class RunOutcome:
     run_id: str
-    status: str  # SUCCEEDED · FAILED · LOST(마감·취소로 WAS 가 닫음) · ALREADY_SUBMITTED
+    status: str  # SUCCEEDED · FAILED · LOST · ALREADY_SUBMITTED · UNCONFIRMED(local only)
     failure_code: str | None
     submitted: bool
     review: str | None = None  # 모델 검토 상태(ReviewStatus 값), 모델을 안 쓰면 None
@@ -186,17 +187,23 @@ class Heartbeat:
         self._log = log
         self._stop = threading.Event()
         self.lost = threading.Event()
+        self.lease_until = run.lease_until
         self._thread = threading.Thread(target=self._loop, name=f"heartbeat-{run.id}", daemon=True)
 
     def beat(self) -> None:
         try:
-            self._client.heartbeat(self._run)
+            lease_until = self._client.heartbeat(self._run)
+            if lease_until is not None:
+                self.lease_until = lease_until
         except RunNotActiveError:
             self.lost.set()
             self._stop.set()
         except (WasError, OSError) as error:
+            if isinstance(error, WasError) and error.status in (401, 403):
+                self.lost.set()
+                self._stop.set()
             # 한 번 실패는 넘긴다. 임대(60초) 안에 다음 하트비트가 다시 늘린다.
-            self._log(f"heartbeat failed run={self._run.id}: {type(error).__name__} {error}")
+            self._log(f"heartbeat failed run={self._run.id}: {type(error).__name__}")
 
     def start(self) -> None:
         self._thread.start()
@@ -223,19 +230,56 @@ class _EventSender:
         self._run = run
         self._log = log
         self._sent = 0
+        self._disabled = False
 
     def flush(self) -> None:
         pending = [event.to_json() for event in self.events.events[self._sent :]]
-        if not pending:
+        if not pending or self._disabled:
             return
-        try:
-            self._client.send_events(self._run, pending)
-        except RunNotActiveError:
-            raise
-        except (WasError, OSError) as error:
-            self._log(f"events failed run={self._run.id}: {type(error).__name__} {error}")
-            return
-        self._sent = len(self.events.events)
+        for batch in event_batches(pending):
+            if not self._send_batch(batch):
+                return
+            self._sent = batch[-1]["seq"]
+
+    def _send_batch(self, batch: list[dict[str, Any]]) -> bool:
+        for attempt in range(2):
+            try:
+                self._client.send_events(self._run, batch)
+                return True
+            except RunNotActiveError:
+                raise
+            except (WasError, OSError) as error:
+                if isinstance(error, WasError) and error.status in (401, 403):
+                    raise
+                rejected = (
+                    isinstance(error, WasError)
+                    and error.status == 422
+                    and error.code == RESULT_INVALID
+                )
+                if not rejected:
+                    if attempt:
+                        self._disabled = True
+                        self._log(f"events disabled run={self._run.id}; summary unconfirmed")
+                        return False
+                    self._log(f"events unconfirmed run={self._run.id}; retry on next flush")
+                    return False
+                if attempt:
+                    self._disabled = True
+                    self._log(f"events disabled run={self._run.id}; summary also rejected")
+                    return False
+                self._log(f"events rejected run={self._run.id}; sending summary once")
+                batch = [
+                    {
+                        "seq": item["seq"],
+                        "at": item["at"],
+                        "step": item["step"],
+                        "level": "WARN",
+                        "message": "event details omitted after rejection",
+                        "data": {"omitted": True, "reason": RESULT_INVALID},
+                    }
+                    for item in batch
+                ]
+        return False
 
 
 def process_run(

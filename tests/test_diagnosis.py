@@ -449,14 +449,18 @@ def test_invalid_projection_cannot_submit_patch_or_lose_transfer(
     assert result["patches"] == []
 
 
-def test_was_rejection_never_drops_diagnosis_or_retries_as_precheck(
+def test_was_rejection_only_drops_diagnosis_for_explicit_failed_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake = FakeWas(_routes(result=lambda p, b: fail(422, "RESULT_INVALID")))
     run, service = _wired_runtime(monkeypatch, fake)
     outcome = process_run(_client(fake), run, diagnoser=service, log=lambda _: None)
     assert not outcome.submitted
-    assert len(fake.bodies("result")) == 1
+    assert len(fake.bodies("result")) == 2
+    fallback = fake.bodies("result")[1]
+    assert fallback["status"] == "FAILED" and fallback["failureCode"] == "RUNNER_ERROR"
+    assert fallback["patches"] == [] and "diagnosis" not in fallback
+    assert outcome.status == "UNCONFIRMED"
     assert "diagnosis" in fake.bodies("result")[0]
 
 

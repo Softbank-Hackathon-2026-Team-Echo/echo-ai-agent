@@ -1,6 +1,7 @@
 """샌드박스 설정·경로·출력 자르기(Docker 없이)."""
 
 import asyncio
+import json
 import sys
 
 import pytest
@@ -98,14 +99,15 @@ async def test_cancelling_docker_cli_reaps_owned_process(monkeypatch: pytest.Mon
     assert spawned[0].returncode is not None
 
 
-def test_event_log_numbers_events_and_clips_long_text() -> None:
+def test_event_log_numbers_events_and_bounds_only_wire_copy() -> None:
     log = RunEventLog("run-1")
     log.add(RunStep.SANDBOX_CREATE, "sandbox created")
     event = log.add(RunStep.ANALYZE, "workspace command finished", EventLevel.WARN, out="y" * 5000)
     assert [e.seq for e in log.events] == [1, 2]
-    assert len(event.data["out"]) < 5000
-    assert event.data["out"].startswith("y" * DATA_TEXT_LIMIT)
+    assert event.data["out"] == "y" * 5000
     payload = event.to_json()
+    assert len(json.dumps(payload["data"], ensure_ascii=False)) <= DATA_TEXT_LIMIT
+    assert payload["data"]["truncated"] is True
     assert payload["step"] == "ANALYZE"
     assert payload["level"] == "WARN"
     assert payload["at"].endswith("Z")

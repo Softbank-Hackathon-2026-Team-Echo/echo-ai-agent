@@ -18,7 +18,7 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Self
@@ -27,6 +27,7 @@ RUNNER_TOKEN_PREFIX = "echo_rnr_"  # noqa: S105 — 접두어(값 아님)
 RUN_TOKEN_PREFIX = "echo_run_"  # noqa: S105 — 접두어(값 아님)
 API_PREFIX = "/api/v1/runner"
 EVENTS_BATCH_LIMIT = 100
+MAX_BODY_BYTES = 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 15.0
 USER_AGENT = "echo-ai-agent-precheck-runner/0.1"
 
@@ -35,6 +36,29 @@ _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 # (요청, 시간 제한) → (HTTP 상태, 본문). 시험에서 바꿔 끼운다.
 Transport = Callable[[urllib.request.Request, float], tuple[int, bytes]]
+
+
+def encode_body(body: Mapping[str, Any]) -> bytes:
+    return json.dumps(body, ensure_ascii=False, allow_nan=False).encode()
+
+
+def event_batches(events: Sequence[Mapping[str, Any]]) -> Iterator[list[dict[str, Any]]]:
+    """Bound the exact wire encoding, including the enclosing object and separators."""
+    batch: list[dict[str, Any]] = []
+    size = len(encode_body({"events": []}))
+    for event in events:
+        item = dict(event)
+        item_size = len(encode_body(item))
+        extra = item_size + (2 if batch else 0)
+        if batch and (len(batch) >= EVENTS_BATCH_LIMIT or size + extra > MAX_BODY_BYTES):
+            yield batch
+            batch, size, extra = [], len(encode_body({"events": []})), item_size
+        if size + extra > MAX_BODY_BYTES:
+            raise WasError(422, "RESULT_INVALID")
+        batch.append(item)
+        size += extra
+    if batch:
+        yield batch
 
 
 class WasConfigError(Exception):
@@ -162,18 +186,28 @@ class WasClient:
     def send_events(self, run: ClaimedRun, events: Sequence[Mapping[str, Any]]) -> int | None:
         """이벤트를 100개씩 나눠 보낸다. 마지막 응답의 `acceptedUpTo`."""
         accepted: int | None = None
-        for start in range(0, len(events), EVENTS_BATCH_LIMIT):
-            batch = [dict(event) for event in events[start : start + EVENTS_BATCH_LIMIT]]
+        for batch in event_batches(events):
             data = self._post(self._run_path(run, "events"), run.run_token, {"events": batch})
             value = data.get("acceptedUpTo")
-            accepted = value if isinstance(value, int) else accepted
+            if type(value) is not int or value < batch[-1]["seq"] or value > 2_147_483_647:
+                raise WasError(200, "EVENT_RESPONSE_INVALID")
+            accepted = value
         return accepted
 
-    def submit_result(self, run: ClaimedRun, result: Mapping[str, Any]) -> str | None:
+    def submit_result(
+        self, run: ClaimedRun, result: Mapping[str, Any], *, timeout_seconds: float | None = None
+    ) -> str:
         """결과 제출. WAS 가 저장한 `status`. 두 번째 제출은 `ResultAlreadySubmittedError`."""
-        data = self._post(self._run_path(run, "result"), run.run_token, dict(result))
+        data = self._post(
+            self._run_path(run, "result"),
+            run.run_token,
+            dict(result),
+            timeout_seconds=timeout_seconds,
+        )
         status = data.get("status")
-        return status if isinstance(status, str) else None
+        if status not in ("SUCCEEDED", "FAILED") or status != result.get("status"):
+            raise WasError(200, "RESULT_RESPONSE_INVALID")
+        return str(status)
 
     # ------------------------------------------------------------ 내부
 
@@ -181,10 +215,23 @@ class WasClient:
     def _run_path(run: ClaimedRun, action: str) -> str:
         return f"{API_PREFIX}/runs/{urllib.parse.quote(run.id, safe='')}/{action}"
 
-    def _post(self, path: str, token: str, body: Mapping[str, Any]) -> dict[str, Any]:
+    def _post(
+        self,
+        path: str,
+        token: str,
+        body: Mapping[str, Any],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        try:
+            raw_body = encode_body(body)
+        except (ValueError, TypeError, UnicodeError):
+            raise WasError(422, "RESULT_INVALID") from None
+        if len(raw_body) > MAX_BODY_BYTES:
+            raise WasError(422, "RESULT_INVALID")
         request = urllib.request.Request(  # noqa: S310 — scheme 은 __init__ 에서 확인
             self.base_url + path,
-            data=json.dumps(body, ensure_ascii=False).encode(),
+            data=raw_body,
             method="POST",
             headers={
                 "Authorization": f"Bearer {token}",
@@ -193,11 +240,14 @@ class WasClient:
                 "User-Agent": USER_AGENT,
             },
         )
-        status, raw = self._transport(request, self._timeout)
+        timeout = self._timeout if timeout_seconds is None else min(self._timeout, timeout_seconds)
+        status, raw = self._transport(request, timeout)
         envelope = _decode(raw)
-        if 200 <= status < 300 and envelope.get("success", True) is not False:
+        if 200 <= status < 300:
             data = envelope.get("data")
-            return data if isinstance(data, dict) else {}
+            if envelope.get("success") is not True or not isinstance(data, dict):
+                raise WasError(status, "RESPONSE_INVALID")
+            return data
         code = envelope.get("code")
         code = code if isinstance(code, str) else None
         error_type = _ERRORS_BY_CODE.get(code or "", WasError)
