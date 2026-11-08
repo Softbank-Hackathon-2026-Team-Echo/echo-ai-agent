@@ -2,9 +2,11 @@
 
 이벤트 하나 = `seq · at · step · level · message · data`.
 message 는 고정 문장이고 값은 data 에 둔다.
-모델 출력·명령 출력 원문은 message 에 넣지 않고, data 에 넣을 때는 길이를 자른다.
+모델 출력·명령 출력 원문은 message 에 넣지 않고, 전송 사본의 data 전체 길이를 제한한다.
 """
 
+import json
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -29,8 +31,70 @@ class EventLevel(StrEnum):
     ERROR = "ERROR"
 
 
-# data 안 문자열 하나의 최대 길이.
+# WAS counts the whole serialized data value, not each string.
 DATA_TEXT_LIMIT = 2_000
+MESSAGE_TEXT_LIMIT = 200
+
+
+def wire_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Bound only the transport copy. Do not alter model evidence or approved diffs."""
+    changed = False
+    remaining = 2_048
+
+    def clean(value: Any, depth: int = 0) -> Any:
+        nonlocal changed, remaining
+        remaining -= 1
+        if remaining < 0 or depth > 12:
+            changed = True
+            return "[omitted]"
+        if isinstance(value, str):
+            text = value.replace("\x00", "\ufffd").encode("utf-8", "replace").decode()
+            changed |= text != value
+            return text
+        if value is None or isinstance(value, bool):
+            return value
+        if isinstance(value, int) and value.bit_length() <= 1_024:
+            return value
+        if isinstance(value, float) and math.isfinite(value):
+            return value
+        if isinstance(value, dict):
+            out = {}
+            for key, item in value.items():
+                if remaining <= 0:
+                    changed = True
+                    break
+                if not isinstance(key, str):
+                    changed = True
+                    continue
+                out[clean(key, depth + 1)] = clean(item, depth + 1)
+            return out
+        if isinstance(value, (list, tuple)):
+            items = []
+            for item in value:
+                if remaining <= 0:
+                    changed = True
+                    break
+                items.append(clean(item, depth + 1))
+            return items
+        changed = True
+        return "[omitted]"  # Never stringify arbitrary objects/credential wrappers.
+
+    safe = clean(data)
+    output = {"sanitized": True, "data": safe} if changed else safe
+    encoded = json.dumps(output, ensure_ascii=False, allow_nan=False)
+    if len(encoded) <= DATA_TEXT_LIMIT:
+        return dict(output)
+    preview = {"truncated": True, "reason": "DATA_TOO_LARGE", "preview": ""}
+    low, high = 0, min(len(encoded), DATA_TEXT_LIMIT)
+    while low < high:
+        mid = (low + high + 1) // 2
+        preview["preview"] = encoded[:mid]
+        if len(json.dumps(preview, ensure_ascii=False)) <= DATA_TEXT_LIMIT:
+            low = mid
+        else:
+            high = mid - 1
+    preview["preview"] = encoded[:low]
+    return preview
 
 
 @dataclass(frozen=True)
@@ -48,8 +112,8 @@ class RunEvent:
             "at": self.at.isoformat().replace("+00:00", "Z"),
             "step": self.step.value,
             "level": self.level.value,
-            "message": self.message,
-            "data": self.data,
+            "message": self.message.replace("\x00", "\ufffd")[:MESSAGE_TEXT_LIMIT],
+            "data": wire_data(self.data),
         }
 
 
@@ -73,7 +137,7 @@ class RunEventLog:
             step=step,
             level=level,
             message=message,
-            data={key: _clip(value) for key, value in data.items()},
+            data=data,
         )
         self.events.append(event)
         return event
@@ -81,9 +145,3 @@ class RunEventLog:
     @property
     def steps(self) -> list[RunStep]:
         return [event.step for event in self.events]
-
-
-def _clip(value: Any) -> Any:
-    if isinstance(value, str) and len(value) > DATA_TEXT_LIMIT:
-        return value[:DATA_TEXT_LIMIT] + "…(잘림)"
-    return value

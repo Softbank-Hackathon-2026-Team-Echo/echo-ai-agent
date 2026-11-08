@@ -35,6 +35,7 @@ from typing import Any, Protocol
 
 from echo_agent.diagnosis_input import redact, sensitive_source_path
 from echo_agent.events import EventLevel, RunEventLog, RunStep
+from echo_agent.result_delivery import submit_with_recovery
 from echo_agent.was_client import (
     ClaimedRun,
     ResultAlreadySubmittedError,
@@ -1375,16 +1376,21 @@ def process_apply_run(
             )
             status, failure_code, commit_sha = "FAILED", FAILURE_DEADLINE, None
         sender.flush()
-        stored = client.submit_result(
-            run, build_apply_result(status, failure_code, commit_sha, branch)
+        receipt = submit_with_recovery(
+            client,
+            run,
+            build_apply_result(status, failure_code, commit_sha, branch),
+            heartbeat,
+            clock=clock,
+            log=log,
         )
-        return run.id, stored or status, failure_code, True
+        return run.id, receipt.status, receipt.failure_code, True
     except RunNotActiveError:
         return run.id, "LOST", None, False
     except ResultAlreadySubmittedError:
         return run.id, "ALREADY_SUBMITTED", None, False
     except (WasError, OSError) as error:
-        log(f"apply result failed run={run.id}: {type(error).__name__} {error}")
-        return run.id, "FAILED", FAILURE_RUNNER_ERROR, False
+        log(f"apply result unconfirmed run={run.id}: {type(error).__name__}; server state unknown")
+        return run.id, "UNCONFIRMED", FAILURE_RUNNER_ERROR, False
     finally:
         heartbeat.stop()

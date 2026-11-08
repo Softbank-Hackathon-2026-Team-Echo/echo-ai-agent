@@ -81,7 +81,12 @@ def _run_payload(deadline: datetime | None = None) -> dict[str, Any]:
 def _routes(**overrides: Handler) -> dict[str, Handler]:
     routes: dict[str, Handler] = {
         "runs:claim": lambda p, b: ok(_run_payload()),
-        "heartbeat": lambda p, b: ok({"status": "RUNNING", "leaseUntil": "2026-11-05T10:01:00Z"}),
+        "heartbeat": lambda p, b: ok(
+            {
+                "status": "RUNNING",
+                "leaseUntil": (datetime.now(UTC) + timedelta(minutes=1)).isoformat(),
+            }
+        ),
         "events": lambda p, b: ok({"acceptedUpTo": b["events"][-1]["seq"]}),
         "result": lambda p, b: ok({"status": b["status"]}),
     }

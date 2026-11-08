@@ -53,6 +53,7 @@ from echo_agent.precheck_model import (
     ModelTransfer,
     clean_text,
 )
+from echo_agent.result_delivery import submit_with_recovery
 from echo_agent.was_client import (
     ClaimedRun,
     ResultAlreadySubmittedError,
@@ -884,15 +885,15 @@ def process_diagnosis_run(
         result = build_diagnosis_result(
             outcome, status=status, failure_code=failure_code, transfer=transfer
         )
-        stored = client.submit_result(run, result)
-        return run.id, stored or status, failure_code, True, review
+        receipt = submit_with_recovery(client, run, result, heartbeat, clock=clock, log=log)
+        return run.id, receipt.status, receipt.failure_code, True, review
     except RunNotActiveError:
         return run.id, "LOST", None, False, None
     except ResultAlreadySubmittedError:
         return run.id, "ALREADY_SUBMITTED", None, False, None
     except (WasError, OSError) as error:
-        log(f"diagnosis result failed run={run.id}: {type(error).__name__} {error}")
-        return run.id, "FAILED", FAILURE_RUNNER_ERROR, False, None
+        log(f"diagnosis result unconfirmed run={run.id}: {type(error).__name__}; state unknown")
+        return run.id, "UNCONFIRMED", FAILURE_RUNNER_ERROR, False, None
     finally:
         heartbeat.stop()
 

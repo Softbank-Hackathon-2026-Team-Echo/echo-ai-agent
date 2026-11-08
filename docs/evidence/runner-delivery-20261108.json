@@ -1,0 +1,161 @@
+{
+  "checkedAt": "2026-11-08T00:30:37.399403+09:00",
+  "runnerCodeCommit": "9fb1cfc57d2806389dac1d80649345a6e2317664",
+  "base": "0d10ac16b42d4879491090a5d064b705ad68daf8",
+  "wasMain": "87966f77f3c73a5db4c2492ec8054312cc105012",
+  "was135": "053df94eb2c5b51e5ba0c5214e0d4a77ea5a51fd",
+  "was138Excluded": "eacbc776d13eb076ebcd61a8243d72e383498c20",
+  "frontend": "c179ed45325fa6daf07de5e407acba966fc18ec2",
+  "tests": {
+    "runner_local": {
+      "tests": 490,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "junitSha256": "a52296e77bea4b3e26c108aa1d46f9e91002506b2e227e16b23742469de470b1",
+      "passed": 490
+    },
+    "was_main_with_runner_contract": {
+      "tests": 2947,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "junitSha256": "c2474f5c33765cb38ce6ae825c56faa639736c6c85f8552ce23f90984500893c",
+      "passed": 2947
+    },
+    "was_main_runner_contract": {
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "junitSha256": "e65cf44d78b4954751f03ed1b85c279697b4f7cd7a717177e0531fac0b065323",
+      "passed": 4
+    },
+    "was_135_related": {
+      "tests": 216,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "junitSha256": "803e05c9771583915c4479df81589bcd2b334c113e42dccf3c09b13a18724df8",
+      "passed": 216
+    },
+    "was_135_runner_contract": {
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "junitSha256": "304561110ea81c54185cf7167b5b31918989d038ed7f49344d803f09dddb2ad6",
+      "passed": 4
+    },
+    "frontend_existing": {
+      "tests": 366,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "junitSha256": "197f6b6fe8f81ace815f13ba1c5bbe40772116090603e232def18ded2eec462f",
+      "passed": 366
+    },
+    "runner_gcp": {
+      "tests": 490,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 2,
+      "passed": 488,
+      "junitSha256": "39649ff1dd3ff8bce7e92c47b2d13beed6f6c301b6295dad99ca21eb35843146",
+      "skips": [
+        {
+          "name": "test_real_parser_detects_error_at_html_line_and_never_executes_js",
+          "reason": "Node parser is not installed"
+        },
+        {
+          "name": "test_full_diagnosis_with_real_parser_and_model_fixture",
+          "reason": "Node parser is not installed"
+        }
+      ]
+    }
+  },
+  "syntaxPair": {
+    "ok": true,
+    "sourceCommitSha": "53997e169a29604b37088b793425b7d72a7946bf",
+    "fixedCommitSha": "d387b612d83f97c0d77be660ffddfeb7f18751e4",
+    "path": "app/main.py",
+    "expectedFailure": {
+      "path": "app/main.py",
+      "line": 213,
+      "message": "'(' was never closed"
+    },
+    "before": {
+      "available": true,
+      "passed": false,
+      "toolVersion": "Python 3.13.18",
+      "issues": [
+        {
+          "path": "app/main.py",
+          "line": 213,
+          "message": "'(' was never closed"
+        }
+      ],
+      "reason": null
+    },
+    "after": {
+      "available": true,
+      "passed": true,
+      "toolVersion": "Python 3.13.18",
+      "issues": [],
+      "reason": null
+    },
+    "sourceSha256": [
+      "3240da86d89eaa4e09c762e3fc1332b776cc7c469994b52b8c481113277504f9",
+      "173a7c868d2205c0cb732424a51009544ea807cd627329e55a2292371c6469f5"
+    ],
+    "unifiedDiffSha256": "7f8e94bc9b8f1dc843b6ab28a08e9daf9e8ada40c3dd9a119d5db61a74b4dab6",
+    "scope": "same pinned parser; syntax only; no new model/build/deployment execution"
+  },
+  "priorApproval": {
+    "run_id": "cbc09cf4-c5eb-4564-a0ea-cda6196a036c",
+    "patch_id": "diagnosis-7f8e94bc9b8f1dc8",
+    "patch_hash": "sha256:7f8e94bc9b8f1dc843b6ab28a08e9daf9e8ada40c3dd9a119d5db61a74b4dab6",
+    "checks_digest": "sha256:bf7c0ecf768eccae3785a817622c6c35a3874dd8ca19d22c76135314b2513496",
+    "decision": "APPROVED",
+    "apply_run_id": "cedadb42-d961-4834-b1c9-b4ddf4a41716"
+  },
+  "approvalDiffHashMatches": true,
+  "priorRedeployRequestId": "7d7e462c-a364-4064-be13-846e441fb80f",
+  "runtimeReadOnly": {
+    "runnerRelease": "0d10ac1",
+    "runnerService": "active",
+    "apiAndWorkerImage": "sha256:a68ce238f4690f9b41b73e41bbe4889cdb2b168e0dca87279e6c6651e4bece67",
+    "apiAndWorker": {
+      "patch_apply_enabled": true,
+      "ai_diagnosis_runner_enabled": true,
+      "ai_diagnosis_simulate_enabled": false,
+      "ai_apply_commit_enabled": true
+    },
+    "openAgentRunsAtRead": 0
+  },
+  "frontendBuild": {
+    "status": "PASS",
+    "node": "22.23.4",
+    "productChanges": false
+  },
+  "limitations": [
+    "No new real-model or production end-to-end execution",
+    "Frontend followUp consumption and browser acceptance remain pending",
+    "WAS #138 automatic recovery excluded",
+    "Local PostgreSQL fixtures use synchronous_commit=off; not crash-durability proof",
+    "Existing approval/redeploy is historical, syntax replay is new",
+    "No PR merge or active runtime switch"
+  ],
+  "initialFailures": [
+    "Old result-rejection test expected one submission; updated for authorized minimal FAILED recovery. Final suite passes.",
+    "Frontend Node22.12 lacks undici required >=22.19 API; rerun on existing Node22.23.4 passes, lock unchanged.",
+    "GCP lint initially scanned newly prepared uv dependency cache under source directory; moved cache outside source, ruff/format/mypy then pass; 488 tests pass and 2 local-only parser tests skip.",
+    "pnpm wrapper initially consumed Vitest output option; direct exec used."
+  ],
+  "gcpCandidate": {
+    "archiveSha256": "379e39327cd287bd5db4e5ed73d45a78de61e6265c4cc5dc8bf8e0bf77d6a18f",
+    "activeReleaseUnchanged": true,
+    "user": "echo-runner",
+    "systemdConfinementNotRecreated": true
+  }
+}
