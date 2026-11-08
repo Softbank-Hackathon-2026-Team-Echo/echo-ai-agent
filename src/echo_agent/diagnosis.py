@@ -21,7 +21,9 @@ from echo_agent.diagnosis_input import (
 )
 from echo_agent.diagnosis_model import PROMPT_VERSION, DiagnosisModel, validate_answer
 from echo_agent.events import RunEventLog, RunStep
+from echo_agent.independent_review import freeze_definition, make_evidence, review, review_request
 from echo_agent.precheck_model import request_body_bytes
+from echo_agent.review_evidence import REVIEW_POLICY
 
 MAX_SECONDS = 180.0
 EventCallback = Callable[[], None]
@@ -127,6 +129,10 @@ class DiagnosisService:
         try:
             budget(1)
             request = DiagnosisInput.parse(snapshot)
+            policy = snapshot.get("reviewPolicy")
+            if policy is not None and policy != REVIEW_POLICY:
+                raise DiagnosisError("REVIEW_POLICY_UNSUPPORTED")
+            definition = freeze_definition(request.path) if policy else None
             checker = self.checker or DockerSyntaxChecker(path=request.path)
             python = request.path == PYTHON_FILE
             language = "Python" if python else "JavaScript"
@@ -300,6 +306,52 @@ class DiagnosisService:
                             ],
                         }
                     ]
+                    if definition is not None:
+                        try:
+                            if result["simulated"] or before is None or request.commit is None:
+                                raise DiagnosisError("REVIEW_NOT_REAL")
+                            binding = make_evidence(
+                                request.commit,
+                                diff,
+                                definition,
+                                before,
+                                after,
+                                request.source,
+                                answer.patched,
+                            )
+                            emit(
+                                RunStep.PATCH_VERIFY,
+                                "independent review started",
+                                testDefinitionHash=binding["testDefinitionHash"],
+                                patchHash=binding["patchHash"],
+                            )
+                            review_call = review_request(self.model, binding, diff, budget(30))
+                            processing["externalTransferBytes"] += request_body_bytes(review_call)
+                            bound = await review(self.model, review_call, binding, diff, budget(30))
+                            patch = result["patches"][0]
+                            patch["reviewEvidence"] = bound
+                            patch["checks"].append(
+                                {
+                                    "name": "INDEPENDENT_REVIEW",
+                                    "result": "PASS",
+                                    "policyVersion": REVIEW_POLICY,
+                                    "summary": "별도 문맥 검토 통과. 문법 시험·수정안 지문 결속. "
+                                    "기능 검증은 별도입니다.",
+                                }
+                            )
+                            emit(
+                                RunStep.PATCH_VERIFY,
+                                "independent review passed",
+                                evidenceHash=bound["evidenceHash"],
+                            )
+                        except DiagnosisError as error:
+                            result["patches"] = []
+                            diagnosis.update(canFix=False, reason=error.code)
+                            emit(
+                                RunStep.PATCH_VERIFY,
+                                "independent review did not pass",
+                                reason=error.code,
+                            )
                     break
                 diagnosis.update(canFix=False, reason=after.reason or "PATCH_VERIFICATION_FAILED")
                 if not after.available or attempt == 2:

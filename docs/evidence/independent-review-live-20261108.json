@@ -1,0 +1,90 @@
+{
+  "status": "SUCCEEDED",
+  "failureCode": null,
+  "patchCount": 1,
+  "calls": [
+    {
+      "model": "claude-opus-5-5",
+      "inputTokens": 2066,
+      "outputTokens": 534
+    },
+    {
+      "model": "claude-opus-5-5",
+      "inputTokens": 1460,
+      "outputTokens": 180
+    }
+  ],
+  "evidence": {
+    "version": "syntax-review-v1",
+    "sourceCommitSha": "1111111111111111111111111111111111111111",
+    "patchHash": "sha256:53d074449d7260c04a4392b11d4347cc686b5f0e56157c9c948460c3a3bf9554",
+    "testDefinition": {
+      "policy": "syntax-review-v1",
+      "reviewPromptHash": "sha256:adb9c211e3dacbf477e253e79aaa2c9eee42cd3ff84ee23e5a050f96a730aa8a",
+      "path": "app/main.py",
+      "image": "python:3.13-slim@sha256:ae14d4ce8771606477a81446e7ef429edd6762305fc50c84507c1041fa8285d1",
+      "parserHash": "sha256:490d5ed99802a74f39775bd0520a3155205627f1bd2520d76e45911b42655bda",
+      "command": [
+        "python",
+        "-I",
+        "diagnosis_python_check.py",
+        "input.json"
+      ],
+      "expectedBefore": "available syntax error at the target file",
+      "expectedAfter": "available parse-only success; no application behavior claim",
+      "limits": {
+        "seconds": 15,
+        "memoryMiB": 512,
+        "cpu": 1,
+        "pids": 128,
+        "network": "none"
+      }
+    },
+    "testDefinitionHash": "sha256:ad367d6a2093f4a3ded2e3e89b1f0e0228e98bcced8ffcf9a4934677f92fc391",
+    "testResults": {
+      "before": {
+        "available": true,
+        "passed": false,
+        "toolVersion": "Python 3.13.18",
+        "issues": [
+          {
+            "path": "app/main.py",
+            "line": 2,
+            "message": "'(' was never closed"
+          }
+        ],
+        "sourceHash": "sha256:4da4c28123687c14f4cfd4e90987145839bf65a5ab8f681c3934c895e2eea4e4"
+      },
+      "after": {
+        "available": true,
+        "passed": true,
+        "toolVersion": "Python 3.13.18",
+        "issues": [],
+        "sourceHash": "sha256:45e0b7b42d4c260e0e3cc4eab31c411990c35c1a6fd2f31639e9c9fa021afbe4"
+      }
+    },
+    "testResultsHash": "sha256:ba004b4afc24491dfbb7280379fe0e577377bc984110c0eb079a1cc8c886bf2a",
+    "review": {
+      "verdict": "PASS",
+      "reason": "보고된 2행의 닫히지 않은 괄호에 닫는 괄호 하나만 추가했으며 범위 위반이나 우회가 없습니다. 수정 전 구문 오류, 수정 후 파싱 성공이 확인되었습니다(기능 정확성은 검증 대상 아님).",
+      "contextHash": "sha256:e843cb79bce6f5b631e6d1f8ecc4a0c532e0108aed4e93981160a401130ac45b",
+      "model": "claude-opus-5-5"
+    },
+    "evidenceHash": "sha256:19e6c2dca4b9e7230e8d3fb94981a492caf2a65312d67a06c4eae02516b7c848"
+  },
+  "processing": {
+    "location": "gcp/asia-northeast3",
+    "sandbox": false,
+    "modelProvider": "ANTHROPIC",
+    "model": "claude-opus-5-5",
+    "modelRegion": null,
+    "dataClasses": [
+      "LOGS",
+      "SOURCE_CODE"
+    ],
+    "externalTransfer": true,
+    "externalTransferBytes": 7785
+  },
+  "reason": "런타임 로그(EV000001~EV000003)와 독립 구문 검사(EV000004)가 모두 app/main.py 2번째 줄에서 '(' was never closed 오류를 보고합니다. 소스(SC000002)에서도 `return str(123`에 닫는 괄호가 없습니다. 해당 줄 끝에 ')' 하나만 추가하는 최소 수정을 제안합니다.",
+  "scope": "synthetic source; real model and isolated Docker parser; no WAS submission, commit, PR or deployment"
+}

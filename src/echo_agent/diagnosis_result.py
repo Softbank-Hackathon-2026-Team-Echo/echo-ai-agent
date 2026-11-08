@@ -23,6 +23,12 @@ RESULTS = {
     "no_failure_evidence": "NO_FAILURE_EVIDENCE",
 }
 REASONS = {
+    "REVIEW_REJECTED": "독립 검토에서 수정안이 거절되어 승인할 패치를 제공하지 않습니다.",
+    "REVIEW_INCONCLUSIVE": "독립 검토 판정이 불명확하여 수정안을 보류했습니다.",
+    "REVIEW_UNAVAILABLE": "독립 검토 호출 실패·시간 초과로 수정안을 검증하지 못했습니다.",
+    "REVIEW_INVALID": "독립 검토 응답 또는 증거 지문 검증에 실패했습니다.",
+    "REVIEW_NOT_REAL": "모의 실행은 독립 검토 완료 증거로 사용할 수 없습니다.",
+    "REVIEW_INPUT_INVALID": "독립 검토 입력이 크기·비밀값 조건을 충족하지 못했습니다.",
     "INSUFFICIENT_EVIDENCE": "원인을 확인할 근거가 부족합니다.",
     "PATCH_VERIFICATION_FAILED": "수정본이 문법 검사를 통과하지 못해 패치를 반환하지 않습니다.",
     "CHECK_UNAVAILABLE": "문법 검사 도구를 사용할 수 없어 수정안을 검증하지 못했습니다.",

@@ -133,6 +133,7 @@ class DiagnosisInput:
     log_tail: tuple[str, ...]
     deploy_request_id: str
     environment: str
+    review_policy: str | None = None
 
 
 def parse_diagnosis_input(snapshot: Any) -> DiagnosisInput:
@@ -144,6 +145,10 @@ def parse_diagnosis_input(snapshot: Any) -> DiagnosisInput:
         or snapshot.get("schemaVersion") != DIAGNOSIS_INPUT_SCHEMA_VERSION
     ):
         raise DiagnosisInputError("SCHEMA_VERSION")
+    from echo_agent.review_evidence import REVIEW_POLICY
+
+    if snapshot.get("reviewPolicy") not in (None, REVIEW_POLICY):
+        raise DiagnosisInputError("REVIEW_POLICY_UNSUPPORTED")
     request = snapshot.get("deployRequest")
     if not isinstance(request, Mapping):
         raise DiagnosisInputError("DEPLOY_REQUEST_MISSING")
@@ -182,6 +187,7 @@ def parse_diagnosis_input(snapshot: Any) -> DiagnosisInput:
         log_tail=tail,
         deploy_request_id=str(request.get("id") or ""),
         environment=str(environment.get("kind") or ""),
+        review_policy=snapshot.get("reviewPolicy"),
     )
 
 
@@ -573,6 +579,7 @@ class Diagnoser:
         snapshot = {
             "schemaVersion": 1,
             "purpose": PURPOSE,
+            "reviewPolicy": diagnosis_input.review_policy,
             "deployRequestId": diagnosis_input.deploy_request_id,
             "environment": diagnosis_input.environment,
             "sourceCommit": diagnosis_input.commit_sha,
@@ -629,6 +636,9 @@ class Diagnoser:
                         self._run,
                         min(GIT_SECONDS, left / 5),
                     )
+                    # Canonicalization must never silently replace the reviewed diff.
+                    if patch.get("reviewEvidence") and verified.diff != patch["diff"]:
+                        raise PatchRejected("REVIEW_DIFF_CHANGED")
                     patch["diff"] = verified.diff
                     patch["patchHash"] = compute_patch_hash(verified.diff)
                     patch["checks"].append(

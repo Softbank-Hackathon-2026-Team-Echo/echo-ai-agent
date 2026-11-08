@@ -219,3 +219,8 @@ sudo ln -sfn /opt/echo-ai-agent/releases/<이전 sha> /opt/echo-ai-agent/current
 - 모델이 고른 명령은 작업 공간 컨테이너 안 `sh -c`에서만 돈다. 호스트는 셸을 거치지 않는다.
 - 작업 공간에는 네트워크·키·토큰·볼륨·Docker 소켓이 없다.
 - 의존성은 `exclude-newer` 날짜 이전 배포본만 쓰고, 액션·이미지는 SHA·digest로 고정한다.
+
+
+## 독립 검토 후보 (AI #22)
+
+기존 문법 수정 뒤 별도 문맥 검토를 실행하고 시험 정의·결과·승인 지문을 결속하는 opt-in 후보를 구현했다. WAS `reviewPolicy` 입력으로 동작하며 기본 OFF다. [계약](specs/ai-independent-review.md) · [검증 근거](docs/followups/independent-review-verification.md). WAS 수신/승인과 프론트 소비를 함께 준비한 뒤 별도로 활성화해야 한다.

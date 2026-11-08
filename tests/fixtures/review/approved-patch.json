@@ -1,0 +1,94 @@
+{
+  "id": "diagnosis-b450517287fffd72",
+  "patchHash": "sha256:b450517287fffd723684bcad492a9d92da898770a76ac78080d432f29a9c3389",
+  "files": [
+    "app/main.py"
+  ],
+  "diff": "--- a/app/main.py\n+++ b/app/main.py\n@@ -210,4 +210,4 @@\n # fixture\n # fixture\n def index():\n-    return FileResponse(INDEX_HTML, media_type=\"text/html; charset=utf-8\"\n+    return FileResponse(INDEX_HTML, media_type=\"text/html; charset=utf-8\")\n",
+  "reason": "누락된 닫는 괄호 하나를 복구합니다.",
+  "touchesProtectedFiles": false,
+  "origin": "AI",
+  "checks": [
+    {
+      "name": "DIFF_APPLIES",
+      "result": "PASS",
+      "summary": "원본 코드에 수정안을 정확히 적용할 수 있습니다."
+    },
+    {
+      "name": "POLICY",
+      "result": "PASS",
+      "policyVersion": "diagnosis-v1.3",
+      "summary": "문법 오류 줄에 누락된 닫는 괄호만 추가했습니다."
+    },
+    {
+      "name": "PYTHON_SYNTAX",
+      "result": "PASS",
+      "toolVersion": "Python 3.13.5",
+      "summary": "같은 문법 검사에서 원본은 실패하고 수정본은 통과했습니다."
+    },
+    {
+      "name": "INDEPENDENT_REVIEW",
+      "result": "PASS",
+      "policyVersion": "syntax-review-v1",
+      "summary": "별도 문맥 검토 통과. 문법 시험·수정안 지문 결속. 기능 검증은 별도입니다."
+    }
+  ],
+  "reviewEvidence": {
+    "version": "syntax-review-v1",
+    "sourceCommitSha": "1111111111111111111111111111111111111111",
+    "patchHash": "sha256:b450517287fffd723684bcad492a9d92da898770a76ac78080d432f29a9c3389",
+    "testDefinition": {
+      "policy": "syntax-review-v1",
+      "reviewPromptHash": "sha256:adb9c211e3dacbf477e253e79aaa2c9eee42cd3ff84ee23e5a050f96a730aa8a",
+      "path": "app/main.py",
+      "image": "python:3.13-slim@sha256:ae14d4ce8771606477a81446e7ef429edd6762305fc50c84507c1041fa8285d1",
+      "parserHash": "sha256:490d5ed99802a74f39775bd0520a3155205627f1bd2520d76e45911b42655bda",
+      "command": [
+        "python",
+        "-I",
+        "diagnosis_python_check.py",
+        "input.json"
+      ],
+      "expectedBefore": "available syntax error at the target file",
+      "expectedAfter": "available parse-only success; no application behavior claim",
+      "limits": {
+        "seconds": 15,
+        "memoryMiB": 512,
+        "cpu": 1,
+        "pids": 128,
+        "network": "none"
+      }
+    },
+    "testDefinitionHash": "sha256:ad367d6a2093f4a3ded2e3e89b1f0e0228e98bcced8ffcf9a4934677f92fc391",
+    "testResults": {
+      "before": {
+        "available": true,
+        "passed": false,
+        "toolVersion": "Python 3.13.5",
+        "issues": [
+          {
+            "path": "app/main.py",
+            "line": 213,
+            "message": "'(' was never closed"
+          }
+        ],
+        "sourceHash": "sha256:f3d2a18b7493e72d7a4563af35e0f24df11aa130b8b5db23d2a0fb1b0b9c234e"
+      },
+      "after": {
+        "available": true,
+        "passed": true,
+        "toolVersion": "Python 3.13.5",
+        "issues": [],
+        "sourceHash": "sha256:a7bb762deac32b9a091ee5a0297ac865272197b3726a950aaff4c6d50bb1b42c"
+      }
+    },
+    "testResultsHash": "sha256:2862568bf7524da6d695c97908fd845f5a62161243a587fe8fc111d7fb152eed",
+    "review": {
+      "verdict": "PASS",
+      "reason": "누락된 괄호만 복구하며 동일 문법 시험을 통과했습니다.",
+      "contextHash": "sha256:b97b57ca7056aecd4003dee355e8aac575312daa9e1669a6fac927bf1516c33c",
+      "model": "test-review-model"
+    },
+    "evidenceHash": "sha256:710c40dc5ef50e84077d853166ee8b0bb6bed7217c262c4f03f8fd4d019a99bc"
+  }
+}

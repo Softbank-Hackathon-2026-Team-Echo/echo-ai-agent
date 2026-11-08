@@ -36,6 +36,7 @@ from typing import Any, Protocol
 from echo_agent.diagnosis_input import redact, sensitive_source_path
 from echo_agent.events import EventLevel, RunEventLog, RunStep
 from echo_agent.result_delivery import submit_with_recovery
+from echo_agent.review_evidence import REVIEW_POLICY, approval_digest, text_hash, validate_evidence
 from echo_agent.was_client import (
     ClaimedRun,
     ResultAlreadySubmittedError,
@@ -250,6 +251,18 @@ def parse_apply_input(run: ClaimedRun) -> ApplyInput:
             raise _ApplyFailed(FAILURE_INPUT_INVALID, "SERVICE_REPO")
         if branch != f"{BRANCH_PREFIX}{run.id}":
             raise _ApplyFailed(FAILURE_INPUT_INVALID, "BRANCH_NOT_RUN_ID")
+        if snapshot.get("reviewPolicy") is not None or patch.get("reviewEvidence") is not None:
+            try:
+                if snapshot.get("reviewPolicy") not in (None, REVIEW_POLICY):
+                    raise ValueError("REVIEW_POLICY_UNSUPPORTED")
+                validate_evidence(patch.get("reviewEvidence"), diff, source_commit, files)
+                if snapshot.get("approvalChecksDigest") != approval_digest(dict(patch)):
+                    raise ValueError("REVIEW_APPROVAL_CHANGED")
+                from echo_agent.independent_review import freeze_definition
+
+                freeze_definition(files[0])
+            except (ValueError, TypeError) as error:
+                raise _ApplyFailed(FAILURE_INPUT_INVALID, "REVIEW_BINDING_INVALID") from error
         return ApplyInput(
             parent_run_id=parent,
             patch_id=patch_id,
@@ -1013,6 +1026,15 @@ class ApplyRunner:
                 RunStep.PATCH_VERIFY, "patch did not apply", EventLevel.ERROR, reason=failure.reason
             )
             raise
+        review_evidence = (run.input_snapshot.get("patch") or {}).get("reviewEvidence")
+        if review_evidence is not None:
+            target = review_evidence["testDefinition"]["path"]
+            results = review_evidence["testResults"]
+            if (
+                text_hash(originals[target]) != results["before"]["sourceHash"]
+                or text_hash(patched[target]) != results["after"]["sourceHash"]
+            ):
+                raise _ApplyFailed(FAILURE_INPUT_INVALID, "REVIEW_SOURCE_CHANGED")
         if use_git:
             self._service_commit(run, source, git_dir, f"base: {spec.repo}@{spec.source_commit}")
         for name, text in patched.items():
