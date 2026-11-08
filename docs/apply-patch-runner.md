@@ -2,11 +2,13 @@
 
 러너가 WAS 의 반영 실행을 처리하는 방법이다. 설계·근거는 SPEC [`specs/ai-5-2-apply-patch-runner.md`](../specs/ai-5-2-apply-patch-runner.md), 계약은 부록 A v1 2.1·4절. 코드: `src/echo_agent/apply_runner.py`.
 
+> **2026-11-07 계약 정정:** 현재 5개 결과 필드·null 허용·샌드박스 성공 의미·실패 코드는 [부록 A 4절·6.2절](../specs/ai-1-appendix-a-was-runner-contract.md#4-ai-패치-승인샌드박스-반영)을 따른다. [결과 상세 v1.1](../specs/ai-apply-result-details-v1.1.md)은 WAS 선배포가 필요한 검토안이다. 현재 러너에 새 필드를 추가해 보내지 않는다.
+
 ## 켜기 전에
 
 | 필요 | 이유 | 없으면 |
 |---|---|---|
-| WAS S3(claim 종류 확장·반영 결과 받기) 배포 + `PATCH_APPLY_ENABLED=true` | 지금 WAS 는 `APPLY_PATCH` 를 claim 으로 주지 않고 결과도 받지 않는다 | 러너가 켜져 있어도 받을 실행이 없다 |
+| WAS S3(claim 종류 확장·반영 결과 받기) 배포 + `PATCH_APPLY_ENABLED=true` | [WAS #85](https://github.com/Softbank-Hackathon-2026-Team-Echo/echo-was/pull/85)에 수신이 구현됐고 [AI #5](https://github.com/Softbank-Hackathon-2026-Team-Echo/echo-ai-agent/issues/5#issuecomment-6680448569)에 E2E 성공이 보고됐다. 실행할 배포 버전·스위치는 별도로 확인한다 | 러너가 켜져 있어도 받을 실행이 없다 |
 | 시나리오 사본 `scenarios/demo-app-0ff0d44/`(#18) | 반영 대상 | `FAILED`·`PATCH_APPLY_FAILED`(`TARGET_MISSING`) |
 | 러너 사용자의 docker 권한 + trivy | 빌드·스캔 없이 PASS 를 만들지 않는다 | `FAILED`·`VERIFY_UNAVAILABLE` |
 | 유닛의 `DOCKER_CONFIG`·`TRIVY_CACHE_DIR` 가 상태 폴더(`/var/lib/echo-precheck-runner`) 아래 | 러너 HOME 이 `/nonexistent`·`ProtectSystem=strict` 라 BuildKit 원격 이미지 인증(토큰 seed)과 trivy DB 받기가 쓸 곳이 없다 | `IMAGE_BUILD_FAILED`(`mkdir /nonexistent: read-only file system`)·`IMAGE_SCAN_FAILED` |
